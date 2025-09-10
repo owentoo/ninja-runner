@@ -2,15 +2,16 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — PNG-first with Fallbacks</title>
+  <title>Ninja Runner — Phaser PNG‑first (with fallbacks) • Clean Restart</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    /* Center canvas + hint */
+    /* Center canvas + hint within the viewport (vh/vw) */
     html, body {
       height: 100%; margin: 0;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       background: #f2f2f2;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
     #game { max-width: 900px; }
     .hint { font: 12px/1.4 monospace; color: #333; margin-top: 6px; text-align: center; }
@@ -43,7 +44,7 @@
     backgroundColor: '#87ceeb',
     canvas: document.getElementById('game'),
     physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    scene: { preload, create, update }
+    scene: { key: 'main', preload, create, update }
   });
 
   // --------------- helper placeholder makers (only used if PNG missing) ---------------
@@ -145,7 +146,8 @@
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     s.input.on('pointerdown', () => doThrow(s));
     keyX.on('down', () => doThrow(s));
-    keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
+    // Robust restart: allow R at any time (not only after game over)
+    keyR.on('down', () => { s.scene.restart(); });
 
     // UI
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
