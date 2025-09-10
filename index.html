@@ -33,10 +33,10 @@
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
 
-  // Chance a ground spawn is the running enemy (formerly crate)
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
+  const SUPER_PARALLAX = 0.90; // super banner scroll speed (between hills and groundBack)
 
   // Jump forgiveness + variable height
   const COYOTE_TIME_MS = 120;
@@ -49,6 +49,12 @@
   const SHURIKEN_SPIN_RPS = 3.0;
   const SHURIKEN_SPIN_VARIANCE = 1.0;
 
+  // Power-up (collectible)
+  const POWERUP_SPEED_MULT = 1.5;      // +50% speed
+  const POWERUP_DURATION_MS = 6000;    // 6s
+  const COLLECTIBLE_BASE_INTERVAL = 10000; // 10s average, with randomness
+  const COLLECTIBLE_INTERVAL_JITTER = 4000;
+
   new Phaser.Game({
     type: Phaser.CANVAS,
     width: W, height: H,
@@ -58,7 +64,7 @@
     scene: { preload, create, update }
   });
 
-  // --------------- helper placeholder makers (only used if PNG missing) ---------------
+  // --------------- helper placeholder makers ---------------
   function solid(scene, key, w, h, color) {
     const g = scene.add.graphics();
     g.fillStyle(color, 1).fillRect(0,0,w,h);
@@ -72,15 +78,25 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrate(scene) { // retained for reference; no longer used as a spawn
+  function makeCrate(scene) { // kept for reference
     const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
     g.lineStyle(3, 0x3f2d14, 1).strokeRect(b,b,w-2*b,h-2*b);
     g.generateTexture(key, w, h); g.destroy();
   }
+  // Simple collectible placeholder (glowy circle)
+  function makeCollectibleTex(scene) {
+    const key='collectible';
+    const size=20;
+    const g = scene.add.graphics();
+    g.fillStyle(0xfff066, 1).fillCircle(size/2, size/2, size/2);
+    g.lineStyle(2, 0xffb200, 1).strokeCircle(size/2, size/2, (size/2)-1);
+    g.generateTexture(key, size, size);
+    g.destroy();
+  }
 
-  // ---------------- preload (PNG-first!) ----------------
+  // ---------------- preload ----------------
   function preload() {
     // tiny pixel for bullets/floor
     solid(this, 'px', 2, 2, 0x000000);
@@ -92,26 +108,33 @@
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // Player run sprite sheet (8 frames, 48x55 each)
+    // Player & enemy sprite sheets
     this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
-
-    // NEW: Ground enemy (mirror of ninja), same frame size/count
     this.load.spritesheet('enemyRun', 'ninja_run_enemy.png', { frameWidth: 48, frameHeight: 55 });
 
     // Shuriken art
     this.load.image('shuriken', 'shuriken.png');
 
+    // Super banner (appears during power-up)
+    this.load.image('superBanner', 'super.png');
+
     // Arms / throw placeholders (overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
     for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
 
-    // Obstacle placeholders
+    // Obstacles placeholders
     solid(this, 'cactusRect', 16, 26, 0x000000);
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
+
+    // Collectible placeholder (used only if no `collectible.png`)
+    makeCollectibleTex(this);
+    // If you have a real file, it will override the placeholder key:
+    this.load.on('filecomplete-image-collectible', ()=>{}, this);
+    this.load.image('collectible', 'collectible.png'); // optional; ignore 404 at runtime if not present
   }
 
-  // --------------- create (fallbacks only if PNGs missing) ---------------
+  // ---------------- create ----------------
   function ensureBGAndGroundTextures(s) {
     if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
     if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
@@ -128,11 +151,19 @@
     // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
+    s.speedMult = 1.0;        // current target speed multiplier (1.0 or 1.5)
+    s._prevSpeedMult = 1.0;   // last applied to moving bodies
+    s.invincible = false;
 
     // Parallax layers
     s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
+
+    // Super banner layer (above bg, below ground)
+    // Height chosen to be visible; you can replace with your art’s natural aspect
+    s.superBanner = s.add.tileSprite(0, GROUND_Y-52, W*2, 48, 'superBanner')
+      .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
 
     s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
     s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
@@ -151,25 +182,15 @@
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
     // Anims
-    s.anims.create({
-      key: 'base-run',
-      frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }),
-      frameRate: 12,
-      repeat: -1
-    });
-    // NEW: ground enemy run
-    s.anims.create({
-      key: 'enemy-run',
-      frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }),
-      frameRate: 12,
-      repeat: -1
-    });
+    s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
+    s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
     // Physics groups
-    s.obstacles = s.physics.add.group({ allowGravity:false, immovable:true });
-    s.shurikens = s.physics.add.group({ maxSize: 12 });
+    s.obstacles   = s.physics.add.group({ allowGravity:false, immovable:true });
+    s.collectibles= s.physics.add.group({ allowGravity:false, immovable:true });
+    s.shurikens   = s.physics.add.group({ maxSize: 12 });
 
     // Input
     s.cursors = s.input.keyboard.createCursorKeys();
@@ -194,13 +215,11 @@
     s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    // Collisions (single-hit guard)
+    // Collisions (single-hit guard for shuriken vs obstacles)
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
       if (!b.active || !o.active) return;
-
       if (o.getData('hit')) { b.destroy(); return; }
       b.destroy();
-
       if (o.getData('destructible')) {
         o.setData('hit', true);
         o.setTint(0xffff66);
@@ -211,51 +230,109 @@
       }
     });
 
-    s.physics.add.collider(s.player, s.obstacles, () => endGame(s));
+    // Player vs obstacles (respect invincibility)
+    s.physics.add.collider(s.player, s.obstacles, () => { if (!s.invincible) endGame(s); });
+
+    // Player vs collectible (activate power-up)
+    s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
+      if (!item.active) return;
+      item.destroy();
+      activatePowerUp(s);
+    });
 
     // Spawner bookkeeping
     s.nextSpawn = 0;
+    s.nextCollectible = s.time.now + collectibleInterval();
 
     // Start anims
     s.player.play('base-run');
   }
 
   // ---------------- helpers ----------------
+  function collectibleInterval() {
+    return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER);
+  }
+
   function endGame(s) {
     if (s.gameOver) return;
     s.gameOver = true;
 
+    // Stop physics & motion
     s.physics.world.pause();
+
+    // Stop anims
     s.player.anims.pause();
     s.arms.anims.pause();
 
+    // Disable remaining bodies
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
+    s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
 
     s.gameOverTxt.setText('GAME OVER');
     s.restartTxt.setText('Press R to Restart');
   }
 
-  // Ground enemy (destructible) OR cactus (indestructible)
+  // ----- Power-up: speed + invincible + banner -----
+  function activatePowerUp(s) {
+    // Already active? Refresh timer & keep current state
+    if (s.invincible) {
+      if (s._powerupTimer) s._powerupTimer.remove(false);
+      s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
+      return;
+    }
+
+    s.invincible = true;
+    s.speedMult = POWERUP_SPEED_MULT;
+    s.player.setTint(0x8ef1ff); // subtle cyan tint
+    s.superBanner.setVisible(true);
+
+    // Adjust existing movers’ velocities to match new multiplier
+    rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
+
+    // timer to end it
+    s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
+  }
+
+  function deactivatePowerUp(s) {
+    s.invincible = false;
+    s.speedMult = 1.0;
+    s.player.clearTint();
+    s.superBanner.setVisible(false);
+
+    // Adjust movers back down
+    rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
+  }
+
+  function rescaleMoversForSpeedChange(s, prevMult, newMult) {
+    if (prevMult === newMult) return;
+    const scale = newMult / prevMult;
+
+    // Re-scale existing obstacles & collectibles velocities
+    s.obstacles.children.each(o => { if (o.active && o.body && o.body.velocity) o.body.velocity.x *= scale; });
+    s.collectibles.children.each(c => { if (c.active && c.body && c.body.velocity) c.body.velocity.x *= scale; });
+    s.shurikens.children.each(b => { if (b.active && b.body && b.body.velocity) b.body.velocity.x *= scale; });
+
+    s._prevSpeedMult = newMult;
+  }
+  // ---------------------------------------------------
+
+  // Spawns
   function createGroundObstacle(s) {
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
 
     if (makeEnemy) {
       const e = s.obstacles.create(W + 20, GROUND_Y, 'enemyRun', 0)
-        .setOrigin(0.5,1)
-        .setDepth(4.2);
+        .setOrigin(0.5,1).setDepth(4.2);
       e.play('enemy-run');
-      e.setVelocityX(-s.worldSpeed);
-      // Collision size tuned similarly to player
+      e.setVelocityX(-(s.worldSpeed * s.speedMult));
       e.body.setSize(36,50).setOffset(6,5);
       e.setData('destructible', true);
-      // Optional slight bob for life (disabled to keep hitbox stable)
       return e;
     } else {
       const c = s.obstacles.create(W + 20, GROUND_Y, 'cactusRect')
-        .setOrigin(0.5,1)
-        .setDepth(4.2)
-        .setVelocityX(-s.worldSpeed);
+        .setOrigin(0.5,1).setDepth(4.2);
+      c.setVelocityX(-(s.worldSpeed * s.speedMult));
       c.body.setSize(c.width, c.height).setOffset(0,0);
       c.setData('destructible', false);
       return c;
@@ -266,13 +343,24 @@
     const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0')
       .setOrigin(0.5,1).setDepth(4.2);
     f.play('ptero-fly');
-    f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
+    f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50) * s.speedMult);
     f.setData('destructible', true);
     return f;
   }
 
   function spawnObstacle(s) {
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
+  }
+
+  function spawnCollectible(s) {
+    // Spawn in a safe “lane” above ground enemies, below flyers
+    const y = Phaser.Math.Between(GROUND_Y - 90, GROUND_Y - 60);
+    const item = s.collectibles.create(W + 20, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
+    item.setVelocityX(-(s.worldSpeed * s.speedMult));
+    // Make it pop a little
+    item.setScale(1.1);
+    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 400, repeat: -1 });
+    return item;
   }
 
   function spawnShuriken(s) {
@@ -282,7 +370,7 @@
     const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'shuriken');
     if (!b) return;
 
-    const speed = SHURIKEN_SPEED_BASE + s.difficulty * 20;
+    const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 20) * s.speedMult;
 
     b.setActive(true).setVisible(true).setOrigin(0.5);
     b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
@@ -296,11 +384,9 @@
     b.setVelocityX(speed);
     b.setDepth(4.3);
 
-    // Spin forever (time-based). Randomize slightly per throw.
     const rps = SHURIKEN_SPIN_RPS + Phaser.Math.FloatBetween(-SHURIKEN_SPIN_VARIANCE, SHURIKEN_SPIN_VARIANCE);
     b.rotationSpeed = rps * Math.PI * 2;
 
-    // Safety TTL
     s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
   }
 
@@ -329,20 +415,19 @@
 
     const dt = delta / 1000;
 
-    s.bgClouds.tilePositionX    += (s.worldSpeed * PARALLAX.clouds)     * dt;
-    s.bgMountains.tilePositionX += (s.worldSpeed * PARALLAX.mountains)  * dt;
-    s.bgHills.tilePositionX     += (s.worldSpeed * PARALLAX.hills)      * dt;
-    s.groundBack.tilePositionX  += (s.worldSpeed * PARALLAX.groundBack) * dt;
-    s.groundFront.tilePositionX += (s.worldSpeed * PARALLAX.groundFront)* dt;
+    // Parallax + super banner scroll (speed respects power-up)
+    const scroll = s.worldSpeed * s.speedMult;
+    s.bgClouds.tilePositionX    += (scroll * PARALLAX.clouds)     * dt;
+    s.bgMountains.tilePositionX += (scroll * PARALLAX.mountains)  * dt;
+    s.bgHills.tilePositionX     += (scroll * PARALLAX.hills)      * dt;
+    if (s.superBanner.visible)   s.superBanner.tilePositionX += (scroll * SUPER_PARALLAX) * dt;
+    s.groundBack.tilePositionX  += (scroll * PARALLAX.groundBack) * dt;
+    s.groundFront.tilePositionX += (scroll * PARALLAX.groundFront)* dt;
 
     // Coyote + Jump Buffer
     const now = s.time.now;
-    if (s.player.body.blocked.down) {
-      s.lastOnGroundAt = now;
-    }
-    if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) {
-      s.jumpQueuedAt = now;
-    }
+    if (s.player.body.blocked.down) s.lastOnGroundAt = now;
+    if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
     const canCoyote   = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
     const hasBuffered = (now - s.jumpQueuedAt)   <= JUMP_BUFFER_MS;
 
@@ -364,16 +449,23 @@
       if (b.x > W + 40) b.destroy();
     });
 
+    // Spawn enemies/collectibles
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
     }
 
-    s.obstacles.children.each(o => {
-      if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); }
-    });
+    if (now > s.nextCollectible) {
+      spawnCollectible(s);
+      s.nextCollectible = now + collectibleInterval();
+    }
 
+    // Cleanup when off left
+    s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+    s.collectibles.children.each(c => { if (c.active && c.x < -40) c.destroy(); });
+
+    // UI
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 })();
