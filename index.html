@@ -5,7 +5,6 @@
   <title>Ninja Runner — PNG-first with Fallbacks</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    /* Center canvas + hint */
     html, body {
       height: 100%; margin: 0;
       display: flex; flex-direction: column;
@@ -33,20 +32,22 @@
 
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
-  const CRATE_PROBABILITY = 0.45;
+
+  // Chance a ground spawn is the running enemy (formerly crate)
+  const GROUND_ENEMY_PROBABILITY = 0.45;
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
   // Jump forgiveness + variable height
-  const COYOTE_TIME_MS = 120;     // grace after leaving ground
-  const JUMP_BUFFER_MS = 120;     // grace before landing
-  const JUMP_CUTOFF_FACTOR = 0.5; // early-release reduces upward velocity
+  const COYOTE_TIME_MS = 120;
+  const JUMP_BUFFER_MS = 120;
+  const JUMP_CUTOFF_FACTOR = 0.5;
 
   // Shuriken visuals
-  const SHURIKEN_DISPLAY = 20;    // on-screen size (px)
-  const SHURIKEN_BODY = 16;       // collision box (px)
-  const SHURIKEN_SPIN_RPS = 3.0;  // rotations per second (base)
-  const SHURIKEN_SPIN_VARIANCE = 1.0; // +/- rps variance for variety
+  const SHURIKEN_DISPLAY = 20;
+  const SHURIKEN_BODY = 16;
+  const SHURIKEN_SPIN_RPS = 3.0;
+  const SHURIKEN_SPIN_VARIANCE = 1.0;
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -71,7 +72,7 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrate(scene) {
+  function makeCrate(scene) { // retained for reference; no longer used as a spawn
     const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
@@ -84,7 +85,7 @@
     // tiny pixel for bullets/floor
     solid(this, 'px', 2, 2, 0x000000);
 
-    // Background / ground: try to load real art first; placeholders will be generated if missing
+    // Background / ground
     this.load.image('bgClouds',       'bg_clouds.png');
     this.load.image('bgMountains',    'bg_mountains.png');
     this.load.image('bgHills',        'bg_hills.png');
@@ -94,7 +95,10 @@
     // Player run sprite sheet (8 frames, 48x55 each)
     this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
 
-    // NEW: shuriken art (single frame)
+    // NEW: Ground enemy (mirror of ninja), same frame size/count
+    this.load.spritesheet('enemyRun', 'ninja_run_enemy.png', { frameWidth: 48, frameHeight: 55 });
+
+    // Shuriken art
     this.load.image('shuriken', 'shuriken.png');
 
     // Arms / throw placeholders (overlay only)
@@ -119,7 +123,6 @@
   function create() {
     const s = this;
 
-    // Make sure any missing PNG keys get placeholder textures now
     ensureBGAndGroundTextures(s);
 
     // Scene state
@@ -137,9 +140,9 @@
     // Floor collider
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
 
-    // Player (use sprite sheet) + collider
+    // Player
     s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
-    s.player.body.setSize(36,50).setOffset(6,5); // tune to art
+    s.player.body.setSize(36,50).setOffset(6,5);
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
@@ -151,6 +154,13 @@
     s.anims.create({
       key: 'base-run',
       frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }),
+      frameRate: 12,
+      repeat: -1
+    });
+    // NEW: ground enemy run
+    s.anims.create({
+      key: 'enemy-run',
+      frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }),
       frameRate: 12,
       repeat: -1
     });
@@ -174,11 +184,8 @@
     s.jumpQueuedAt   = -Infinity;
     s.jumpReleased   = false;
 
-    // Buffer jumps when pressed
     s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
-
-    // Variable jump height: mark release
     s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
     s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
 
@@ -218,14 +225,10 @@
     if (s.gameOver) return;
     s.gameOver = true;
 
-    // Stop physics & motion
     s.physics.world.pause();
-
-    // Stop anims
     s.player.anims.pause();
     s.arms.anims.pause();
 
-    // Disable remaining bodies so nothing new collides/moves
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
 
@@ -233,25 +236,46 @@
     s.restartTxt.setText('Press R to Restart');
   }
 
+  // Ground enemy (destructible) OR cactus (indestructible)
   function createGroundObstacle(s) {
-    const makeCrate = Math.random() < CRATE_PROBABILITY;
-    const key = makeCrate ? 'crateRect' : 'cactusRect';
-    const o = s.obstacles.create(W + 20, GROUND_Y, key).setOrigin(0.5,1).setVelocityX(-s.worldSpeed).setDepth(4.2);
-    o.body.setSize(o.width, o.height).setOffset(0,0);
-    o.setData('destructible', !!makeCrate);
-    return o;
+    const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
+
+    if (makeEnemy) {
+      const e = s.obstacles.create(W + 20, GROUND_Y, 'enemyRun', 0)
+        .setOrigin(0.5,1)
+        .setDepth(4.2);
+      e.play('enemy-run');
+      e.setVelocityX(-s.worldSpeed);
+      // Collision size tuned similarly to player
+      e.body.setSize(36,50).setOffset(6,5);
+      e.setData('destructible', true);
+      // Optional slight bob for life (disabled to keep hitbox stable)
+      return e;
+    } else {
+      const c = s.obstacles.create(W + 20, GROUND_Y, 'cactusRect')
+        .setOrigin(0.5,1)
+        .setDepth(4.2)
+        .setVelocityX(-s.worldSpeed);
+      c.body.setSize(c.width, c.height).setOffset(0,0);
+      c.setData('destructible', false);
+      return c;
+    }
   }
+
   function createFlyingObstacle(s) {
-    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0').setOrigin(0.5,1).setDepth(4.2);
-    f.play('ptero-fly'); f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
-    f.setData('destructible', true); return f;
+    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0')
+      .setOrigin(0.5,1).setDepth(4.2);
+    f.play('ptero-fly');
+    f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
+    f.setData('destructible', true);
+    return f;
   }
+
   function spawnObstacle(s) {
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
   }
 
   function spawnShuriken(s) {
-    // Respect group cap
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
 
     const THROW_OFFSET = { x: 14, y: -38 };
@@ -274,7 +298,7 @@
 
     // Spin forever (time-based). Randomize slightly per throw.
     const rps = SHURIKEN_SPIN_RPS + Phaser.Math.FloatBetween(-SHURIKEN_SPIN_VARIANCE, SHURIKEN_SPIN_VARIANCE);
-    b.rotationSpeed = rps * Math.PI * 2; // radians/sec
+    b.rotationSpeed = rps * Math.PI * 2;
 
     // Safety TTL
     s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
@@ -284,7 +308,6 @@
     if (s.gameOver || s.throwing) return;
     s.throwing = true;
 
-    // Show arms overlay just for the throw
     s.arms.setVisible(true);
     s.arms.anims.play('arms-throw', true);
 
@@ -312,12 +335,11 @@
     s.groundBack.tilePositionX  += (s.worldSpeed * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (s.worldSpeed * PARALLAX.groundFront)* dt;
 
-    // ----- Coyote + Jump Buffer -----
+    // Coyote + Jump Buffer
     const now = s.time.now;
     if (s.player.body.blocked.down) {
       s.lastOnGroundAt = now;
     }
-    // Optional continuous buffering while held
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) {
       s.jumpQueuedAt = now;
     }
@@ -329,12 +351,11 @@
       s.jumpQueuedAt = -Infinity;
     }
 
-    // ----- Variable jump height (cut-off) -----
+    // Variable jump height
     if (s.jumpReleased && s.player.body.velocity.y < 0) {
       s.player.setVelocityY(s.player.body.velocity.y * JUMP_CUTOFF_FACTOR);
-      s.jumpReleased = false; // consume release
+      s.jumpReleased = false;
     }
-    // ------------------------------------------
 
     // Shuriken spin + offscreen cleanup
     s.shurikens.children.each(b => {
@@ -349,7 +370,9 @@
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
     }
 
-    s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+    s.obstacles.children.each(o => {
+      if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); }
+    });
 
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
