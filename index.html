@@ -2,10 +2,10 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Parallax with PNG Fallbacks</title>
+  <title>Ninja Runner — PNG-first with Fallbacks</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    /* Center the canvas & hint text in the viewport */
+    /* Center canvas + hint */
     html, body {
       height: 100%; margin: 0;
       display: flex; flex-direction: column;
@@ -23,7 +23,7 @@
 
 <script>
 (() => {
-  // Canvas & gameplay constants
+  // ---------------- constants ----------------
   const W = 800, H = 300;
   const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const GROUND_Y = 250;
@@ -31,21 +31,11 @@
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
   const OBSTACLE_BASE_INTERVAL = 1200;
 
-  // Difficulty scaling
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
-
-  // Projectiles & mix
   const SHURIKEN_SPEED_BASE = 600;
   const CRATE_PROBABILITY = 0.45;
 
-  // Parallax factors
-  const PARALLAX = {
-    clouds:   0.20,
-    mountains:0.35,
-    hills:    0.55,
-    groundBack: 0.95,
-    groundFront:1.15
-  };
+  const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -56,7 +46,7 @@
     scene: { preload, create, update }
   });
 
-  // --- Helpers to make textures ---
+  // --------------- helper placeholder makers (only used if PNG missing) ---------------
   function solid(scene, key, w, h, color) {
     const g = scene.add.graphics();
     g.fillStyle(color, 1).fillRect(0,0,w,h);
@@ -70,58 +60,62 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrateTexture(scene, key, w, h) {
+  function makeCrate(scene) {
+    const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
-    g.lineStyle(3, 0x3f2d14, 1).strokeRect(1,1,w-2,h-2);
-    g.lineStyle(2, 0x3f2d14, 1);
-    g.strokeLineShape(new Phaser.Geom.Line(6, h-14, w-6, h-14));
-    g.strokeLineShape(new Phaser.Geom.Line(6, 14, w-6, 14));
+    g.lineStyle(3, 0x3f2d14, 1).strokeRect(b,b,w-2*b,h-2*b);
     g.generateTexture(key, w, h); g.destroy();
   }
 
+  // ---------------- preload (PNG-first!) ----------------
   function preload() {
-    // 1) Create placeholders FIRST (so they exist even if PNG loads fail)
+    // tiny pixel for bullets/floor
     solid(this, 'px', 2, 2, 0x000000);
 
-    // Background/ground placeholders (tileable)
-    makePattern(this, 'bgClouds',   256, 80, 0xffffff, 0x000000, 8, 0.10);
-    makePattern(this, 'bgMountains',256, 90, 0xa0b1c2, 0x000000,10, 0.12);
-    makePattern(this, 'bgHills',    256, 70, 0x7b8fa6, 0x000000, 8, 0.12);
-    makePattern(this, 'groundBackTile', 128, 18, 0x8b5a2b, 0x000000, 6, 0.18);
-    makePattern(this, 'groundFrontTile',128, 28, 0x6b3f1f, 0x000000, 6, 0.20);
-
-    // Player & obstacles placeholders
-    for (let i=0;i<4;i++) solid(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff);
-    for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
-    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
-    solid(this, 'cactusRect', 16, 26, 0x000000);
-    makeCrateTexture(this, 'crateRect', 48, 48);
-    for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
-
-    // 2) Try to load REAL PNGs (if you added them next to index.html)
-    // If these files exist, they will override the placeholder textures with the same keys.
+    // Try to load your real PNGs first (if present next to index.html)
     this.load.image('bgClouds',       'bg_clouds.png');
     this.load.image('bgMountains',    'bg_mountains.png');
     this.load.image('bgHills',        'bg_hills.png');
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
+
+    // Player & obstacles placeholders (always generated)
+    for (let i=0;i<4;i++) solid(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff);
+    for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
+    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
+    solid(this, 'cactusRect', 16, 26, 0x000000);
+    makeCrate(this);
+    for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
+  }
+
+  // --------------- create (fallbacks only if PNGs missing) ---------------
+  function ensureBGAndGroundTextures(s) {
+    // If a PNG didn't load (file missing), create a placeholder with the same key
+    if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
+    if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
+    if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256, 70, 0x7b8fa6,0x000000, 8, 0.12);
+    if (!s.textures.exists('groundBackTile'))  makePattern(s, 'groundBackTile', 128, 18, 0x8b5a2b, 0x000000, 6, 0.18);
+    if (!s.textures.exists('groundFrontTile')) makePattern(s, 'groundFrontTile',128, 28, 0x6b3f1f, 0x000000, 6, 0.20);
   }
 
   function create() {
     const s = this;
 
-    // Scene state (robust restart)
+    // Make sure any missing PNG keys get placeholder textures now
+    ensureBGAndGroundTextures(s);
+
+    // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
 
-    // Parallax layers
+    // Parallax layers (use whichever textures exist — PNGs will win)
     s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
 
-    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8, W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
-    s.groundFront = s.add.tileSprite(0, GROUND_Y-2, W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
+    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
+    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
 
     // Floor collider
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
@@ -135,7 +129,7 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // Animations
+    // Anims
     s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
     s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
@@ -160,12 +154,8 @@
 
     // Collisions
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
-      if (o.getData('destructible')) {
-        b.destroy(); o.setTint(0xffff66);
-        s.time.delayedCall(60, ()=>{ o.destroy(); s.score += (3 + s.difficulty * 0.5); });
-      } else {
-        b.destroy();
-      }
+      if (o.getData('destructible')) { b.destroy(); o.setTint(0xffff66); s.time.delayedCall(60, ()=>{ o.destroy(); s.score += (3 + s.difficulty * 0.5); }); }
+      else { b.destroy(); }
     });
     s.physics.add.collider(s.player, s.obstacles, () => endGame(s));
 
@@ -177,7 +167,7 @@
     s.arms.play('arms-run');
   }
 
-  // Helpers
+  // ---------------- helpers ----------------
   function endGame(s) {
     if (s.gameOver) return;
     s.gameOver = true;
@@ -188,19 +178,15 @@
   function createGroundObstacle(s) {
     const makeCrate = Math.random() < CRATE_PROBABILITY;
     const key = makeCrate ? 'crateRect' : 'cactusRect';
-    const o = s.obstacles.create(W + 20, GROUND_Y, key)
-      .setOrigin(0.5,1).setVelocityX(-s.worldSpeed).setDepth(4.2);
+    const o = s.obstacles.create(W + 20, GROUND_Y, key).setOrigin(0.5,1).setVelocityX(-s.worldSpeed).setDepth(4.2);
     o.body.setSize(o.width, o.height).setOffset(0,0);
     o.setData('destructible', !!makeCrate);
     return o;
   }
   function createFlyingObstacle(s) {
-    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0')
-      .setOrigin(0.5,1).setDepth(4.2);
-    f.play('ptero-fly');
-    f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
-    f.setData('destructible', true);
-    return f;
+    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0').setOrigin(0.5,1).setDepth(4.2);
+    f.play('ptero-fly'); f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
+    f.setData('destructible', true); return f;
   }
   function spawnObstacle(s) {
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
@@ -228,16 +214,14 @@
     });
   }
 
+  // ---------------- update ----------------
   function update(time, delta) {
-    const s = this;
-    if (s.gameOver) return;
+    const s = this; if (s.gameOver) return;
 
-    // Difficulty progression
     const elapsed = s.time.now - s.startTime;
     s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
     s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
 
-    // Parallax scroll
     const dt = delta / 1000;
     s.bgClouds.tilePositionX    += (s.worldSpeed * PARALLAX.clouds)     * dt;
     s.bgMountains.tilePositionX += (s.worldSpeed * PARALLAX.mountains)  * dt;
@@ -245,25 +229,20 @@
     s.groundBack.tilePositionX  += (s.worldSpeed * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (s.worldSpeed * PARALLAX.groundFront)* dt;
 
-    // Jump
-    if ((s.cursors.up.isDown || s.cursors.space.isDown) && s.player.body.blocked.down) {
-      s.player.setVelocityY(JUMP_VELOCITY);
-    }
+    if ((s.cursors.up.isDown || s.cursors.space.isDown) && s.player.body.blocked.down) s.player.setVelocityY(JUMP_VELOCITY);
 
-    // Spawns
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
     }
 
-    // Cleanup & score
     s.shurikens.children.each(b => { if (b.active && b.x > W + 40) b.destroy(); });
     s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 })();
 </script>
 </body>
 </html>
->
