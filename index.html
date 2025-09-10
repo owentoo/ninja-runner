@@ -37,6 +37,10 @@
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
+  // Jump forgiveness
+  const COYOTE_TIME_MS = 120;   // grace after leaving ground
+  const JUMP_BUFFER_MS = 120;   // grace before landing
+
   new Phaser.Game({
     type: Phaser.CANVAS,
     width: W, height: H,
@@ -73,17 +77,21 @@
     // tiny pixel for bullets/floor
     solid(this, 'px', 2, 2, 0x000000);
 
-    // Try to load your real PNGs first (if present next to index.html)
+    // Background / ground: try to load real art first; placeholders will be generated if missing
     this.load.image('bgClouds',       'bg_clouds.png');
     this.load.image('bgMountains',    'bg_mountains.png');
     this.load.image('bgHills',        'bg_hills.png');
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // Player & obstacles placeholders (always generated)
-    for (let i=0;i<4;i++) solid(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff);
+    // NEW: Player run sprite sheet (8 frames, 48x55 each)
+    this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
+
+    // Arms / throw placeholders (still used for throw overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
     for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
+
+    // Obstacle placeholders
     solid(this, 'cactusRect', 16, 26, 0x000000);
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
@@ -120,18 +128,24 @@
     // Floor collider
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
 
-    // Player + arms
-    s.player = s.physics.add.sprite(120, GROUND_Y, 'base0').setOrigin(0.5,1).setCollideWorldBounds(true);
-    s.player.body.setSize(36,44).setOffset(6,4);
+    // Player (use sprite sheet) + collider
+    s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
+    s.player.body.setSize(36,50).setOffset(6,5); // tune to your art
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
-    s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6);
+    // Arms overlay used only for throws; keep it hidden during run
+    s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
     // Anims
-    s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
-    s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
+    s.anims.create({
+      key: 'base-run',
+      frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }),
+      frameRate: 12,
+      repeat: -1
+    });
+    // keep arms-throw for the overlay
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
@@ -147,16 +161,34 @@
     keyX.on('down', () => doThrow(s));
     keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
+    // Jump buffering / coyote bookkeeping
+    s.lastOnGroundAt = s.time.now;
+    s.jumpQueuedAt   = -Infinity;
+    s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
+    s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
+
     // UI
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
     s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    // Collisions
+    // Collisions (single-hit guard)
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
-      if (o.getData('destructible')) { b.destroy(); o.setTint(0xffff66); s.time.delayedCall(60, ()=>{ o.destroy(); s.score += (3 + s.difficulty * 0.5); }); }
-      else { b.destroy(); }
+      if (!b.active || !o.active) return;
+
+      if (o.getData('hit')) { b.destroy(); return; }
+      b.destroy();
+
+      if (o.getData('destructible')) {
+        o.setData('hit', true);
+        o.setTint(0xffff66);
+        s.time.delayedCall(60, ()=>{
+          if (o.active) o.destroy();
+          s.score += (3 + s.difficulty * 0.5);
+        });
+      }
     });
+
     s.physics.add.collider(s.player, s.obstacles, () => endGame(s));
 
     // Spawner bookkeeping
@@ -164,17 +196,28 @@
 
     // Start anims
     s.player.play('base-run');
-    s.arms.play('arms-run');
   }
 
   // ---------------- helpers ----------------
   function endGame(s) {
     if (s.gameOver) return;
     s.gameOver = true;
+
+    // Stop physics & motion
     s.physics.world.pause();
+
+    // Stop anims
+    s.player.anims.pause();
+    s.arms.anims.pause();
+
+    // Disable remaining bodies so nothing new collides/moves
+    s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
+    s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
+
     s.gameOverTxt.setText('GAME OVER');
     s.restartTxt.setText('Press R to Restart');
   }
+
   function createGroundObstacle(s) {
     const makeCrate = Math.random() < CRATE_PROBABILITY;
     const key = makeCrate ? 'crateRect' : 'cactusRect';
@@ -192,6 +235,9 @@
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
   }
   function spawnShuriken(s) {
+    // Respect group cap
+    if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
+
     const THROW_OFFSET = { x: 14, y: -38 };
     const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'px');
     if (!b) return;
@@ -202,15 +248,23 @@
     b.body.setSize(6,6).setOffset(0,0);
     b.setVelocityX(speed);
     b.setDepth(4.3);
+
+    // Safety TTL
+    s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
   }
   function doThrow(s) {
     if (s.gameOver || s.throwing) return;
     s.throwing = true;
+
+    // Show arms overlay just for the throw
+    s.arms.setVisible(true);
     s.arms.anims.play('arms-throw', true);
+
     s.time.delayedCall(90, ()=> spawnShuriken(s));
     s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+      if (s.gameOver) return;
       s.throwing = false;
-      if (s.player.body.blocked.down) s.arms.anims.play('arms-run', true);
+      s.arms.setVisible(false);
     });
   }
 
@@ -229,7 +283,23 @@
     s.groundBack.tilePositionX  += (s.worldSpeed * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (s.worldSpeed * PARALLAX.groundFront)* dt;
 
-    if ((s.cursors.up.isDown || s.cursors.space.isDown) && s.player.body.blocked.down) s.player.setVelocityY(JUMP_VELOCITY);
+    // ----- Coyote + Jump Buffer -----
+    const now = s.time.now;
+    if (s.player.body.blocked.down) {
+      s.lastOnGroundAt = now;
+    }
+    // Optional continuous buffering while held
+    if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) {
+      s.jumpQueuedAt = now;
+    }
+    const canCoyote   = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
+    const hasBuffered = (now - s.jumpQueuedAt)   <= JUMP_BUFFER_MS;
+
+    if (hasBuffered && (s.player.body.blocked.down || canCoyote)) {
+      s.player.setVelocityY(JUMP_VELOCITY);
+      s.jumpQueuedAt = -Infinity;
+    }
+    // ---------------------------------
 
     if (time > s.nextSpawn) {
       spawnObstacle(s);
