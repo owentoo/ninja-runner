@@ -2,15 +2,16 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Spritesheet Build (GitHub)</title>
+  <title>Ninja Runner — Phaser PNG‑first (with fallbacks) • Clean Restart</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    /* Center canvas + hint within the viewport (vh/vw) */
     html, body {
       height: 100%; margin: 0;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       background: #f2f2f2;
-      font-family: monospace;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
     #game { max-width: 900px; }
     .hint { font: 12px/1.4 monospace; color: #333; margin-top: 6px; text-align: center; }
@@ -23,13 +24,18 @@
 
 <script>
 (() => {
+  // ---------------- constants ----------------
   const W = 800, H = 300;
+  const FRAME = { w: 48, h: 55, ptero: { w: 48, h: 24 } };
   const GROUND_Y = 250;
+
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
   const OBSTACLE_BASE_INTERVAL = 1200;
+
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
   const CRATE_PROBABILITY = 0.45;
+
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
   new Phaser.Game({
@@ -38,128 +44,238 @@
     backgroundColor: '#87ceeb',
     canvas: document.getElementById('game'),
     physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    scene: { preload, create, update }
+    scene: { key: 'main', preload, create, update }
   });
 
+  // --------------- helper placeholder makers (only used if PNG missing) ---------------
   function solid(scene, key, w, h, color) {
     const g = scene.add.graphics();
     g.fillStyle(color, 1).fillRect(0,0,w,h);
+    g.generateTexture(key, w, h);
+    g.destroy();
+  }
+  function makePattern(scene, key, w, h, baseColor, stripeColor, stripeStep=6, stripeAlpha=0.18) {
+    const g = scene.add.graphics();
+    g.fillStyle(baseColor, 1).fillRect(0,0,w,h);
+    g.lineStyle(1, stripeColor, stripeAlpha);
+    for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
   function makeCrate(scene) {
+    const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
-    g.fillStyle(0x8a6f3b, 1).fillRect(0,0,48,48);
-    g.lineStyle(3, 0x3f2d14, 1).strokeRect(1,1,46,46);
-    g.generateTexture('crateRect', 48, 48); g.destroy();
+    g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
+    g.lineStyle(3, 0x3f2d14, 1).strokeRect(b,b,w-2*b,h-2*b);
+    g.generateTexture(key, w, h); g.destroy();
   }
 
+  // ---------------- preload (PNG-first + spritesheet) ----------------
   function preload() {
-    solid(this,'px',2,2,0x000000);
+    // tiny pixel for bullets/floor
+    solid(this, 'px', 2, 2, 0x000000);
 
-    // Always use GitHub raw URL for the spritesheet
-    this.load.spritesheet(
-      'ninjaRun',
-      'https://raw.githubusercontent.com/owentoo/REPO/BRANCH/ninja_run.png',
-      { frameWidth: 48, frameHeight: 55 }
-    );
+    // Try to load your real PNGs first (if present next to index.html)
+    this.load.image('bgClouds',       'bg_clouds.png');
+    this.load.image('bgMountains',    'bg_mountains.png');
+    this.load.image('bgHills',        'bg_hills.png');
+    this.load.image('groundBackTile', 'ground_back_tile.png');
+    this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // Fallbacks for obstacles
+    // NEW: Ninja run spritesheet (8 frames, each 48x55)
+    // Place file as ./ninja_run.png with 8 horizontal frames.
+    this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
+
+    // Fallback placeholders only used if spritesheet is missing
+    for (let i=0;i<4;i++) solid(this, 'base'+i, 48, 55, 0x7db8ff);
+    for (let i=0;i<2;i++) solid(this, 'arms'+i, 48, 55, 0xff8a8a);
+    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, 48, 55, 0xff5252);
+    solid(this, 'cactusRect', 16, 26, 0x000000);
     makeCrate(this);
-    solid(this,'cactusRect',16,26,0x000000);
-    solid(this,'ptero0',48,24,0x000000);
-    solid(this,'ptero1',48,24,0x444444);
+    for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
+  }
+
+  // --------------- create (fallbacks only if PNGs missing) ---------------
+  function ensureBGAndGroundTextures(s) {
+    // If a PNG didn't load (file missing), create a placeholder with the same key
+    if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
+    if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
+    if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256, 70, 0x7b8fa6,0x000000, 8, 0.12);
+    if (!s.textures.exists('groundBackTile'))  makePattern(s, 'groundBackTile', 128, 18, 0x8b5a2b, 0x000000, 6, 0.18);
+    if (!s.textures.exists('groundFrontTile')) makePattern(s, 'groundFrontTile',128, 28, 0x6b3f1f, 0x000000, 6, 0.20);
   }
 
   function create() {
     const s = this;
+
+    // Make sure any missing PNG keys get placeholder textures now
+    ensureBGAndGroundTextures(s);
+
+    // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
 
-    const floor = s.physics.add.staticImage(W/2,GROUND_Y+1,'px').setDisplaySize(W,4).refreshBody();
+    // Parallax layers (use whichever textures exist — PNGs will win)
+    s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
+    s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
+    s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
 
-    // Ninja run anim
-    s.anims.create({
-      key:'ninja-run',
-      frames: s.anims.generateFrameNumbers('ninjaRun',{start:0,end:7}),
-      frameRate:12,
-      repeat:-1
-    });
-    s.player = s.physics.add.sprite(120,GROUND_Y,'ninjaRun',0)
-      .setOrigin(0.5,1).setCollideWorldBounds(true);
-    s.player.body.setSize(36,52).setOffset(6,3);
-    s.player.play('ninja-run');
+    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
+    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
 
-    // Flyers
+    // Floor collider
+    const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
+
+    // --- Player using spritesheet if available ---
+    const hasSheet = s.textures.exists('ninjaRun');
+    if (hasSheet) {
+      // Create run animation from the sheet
+      s.anims.create({ key:'ninja-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start:0, end:7 }), frameRate: 12, repeat:-1 });
+      s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0)
+        .setOrigin(0.5,1)
+        .setCollideWorldBounds(true)
+        .setDepth(4.5);
+      s.player.body.setSize(36, 52).setOffset(6, 3);
+      s.player.play('ninja-run');
+      // We won't use separate arms when the sheet exists
+      s.arms = null;
+    } else {
+      // Fallback to blocky placeholders (old behavior)
+      s.player = s.physics.add.sprite(120, GROUND_Y, 'base0').setOrigin(0.5,1).setCollideWorldBounds(true);
+      s.player.body.setSize(36,44).setOffset(6,4);
+      s.player.setDepth(4.5);
+      s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6);
+      s.events.on('update', ()=>{ if (s.arms) { s.arms.x = s.player.x; s.arms.y = s.player.y; } });
+      s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
+      s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
+      s.player.play('base-run');
+      s.arms.play('arms-run');
+    }
+
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
+    // Physics groups
     s.obstacles = s.physics.add.group({ allowGravity:false, immovable:true });
-    s.shurikens = s.physics.add.group({ maxSize:12 });
+    s.shurikens = s.physics.add.group({ maxSize: 12 });
 
     // Input
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    s.input.on('pointerdown', ()=>doThrow(s));
-    keyX.on('down', ()=>doThrow(s));
-    keyR.on('down', ()=>s.scene.restart());
+    s.input.on('pointerdown', () => doThrow(s));
+    keyX.on('down', () => doThrow(s));
+    // Robust restart: allow R at any time (not only after game over)
+    keyR.on('down', () => { s.scene.restart(); });
 
-    s.scoreText   = s.add.text(14,12,'SCORE 0',{ fontFamily:'monospace', fontSize:16, color:'#000' });
-    s.gameOverTxt = s.add.text(W/2,H/2-10,'',{ fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5);
-    s.restartTxt  = s.add.text(W/2,H/2+16,'',{ fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5);
+    // UI
+    s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
+    s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
+    s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    s.physics.add.collider(s.player,floor);
-    s.physics.add.collider(s.player,s.obstacles,()=>endGame(s));
-    s.physics.add.overlap(s.shurikens,s.obstacles,(b,o)=>{ if(o.getData('destructible')){b.destroy();o.destroy();s.score+=3;} else b.destroy(); });
+    // Collisions
+    s.physics.add.collider(s.player, floor);
+    s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
+      if (o.getData('destructible')) { b.destroy(); o.setTint(0xffff66); s.time.delayedCall(60, ()=>{ o.destroy(); s.score += (3 + s.difficulty * 0.5); }); }
+      else { b.destroy(); }
+    });
+    s.physics.add.collider(s.player, s.obstacles, () => endGame(s));
 
-    s.nextSpawn=0;
+    // Spawner bookkeeping
+    s.nextSpawn = 0;
+
+    // Start anims (fallback only)
+    if (s.arms) {
+      s.player.play('base-run');
+      s.arms.play('arms-run');
+    }
   }
 
-  function endGame(s){
-    if(s.gameOver) return;
-    s.gameOver=true; s.physics.world.pause();
+  // ---------------- helpers ----------------
+  function endGame(s) {
+    if (s.gameOver) return;
+    s.gameOver = true;
+    s.physics.world.pause();
     s.gameOverTxt.setText('GAME OVER');
     s.restartTxt.setText('Press R to Restart');
   }
-
-  function createGroundObstacle(s){
-    const makeCrate=Math.random()<CRATE_PROBABILITY;
-    const key=makeCrate?'crateRect':'cactusRect';
-    const o=s.obstacles.create(W+20,GROUND_Y,key).setOrigin(0.5,1).setVelocityX(-s.worldSpeed);
-    o.setData('destructible',makeCrate); return o;
+  function createGroundObstacle(s) {
+    const makeCrate = Math.random() < CRATE_PROBABILITY;
+    const key = makeCrate ? 'crateRect' : 'cactusRect';
+    const o = s.obstacles.create(W + 20, GROUND_Y, key).setOrigin(0.5,1).setVelocityX(-s.worldSpeed).setDepth(4.2);
+    o.body.setSize(o.width, o.height).setOffset(0,0);
+    o.setData('destructible', !!makeCrate);
+    return o;
   }
-  function createFlyingObstacle(s){
-    const f=s.obstacles.create(W+20,Phaser.Math.Between(GROUND_Y-110,GROUND_Y-60),'ptero0').setOrigin(0.5,1);
-    f.play('ptero-fly'); f.setVelocityX(-s.worldSpeed); f.setData('destructible',true); return f;
+  function createFlyingObstacle(s) {
+    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0').setOrigin(0.5,1).setDepth(4.2);
+    f.play('ptero-fly'); f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
+    f.setData('destructible', true); return f;
   }
-  function spawnObstacle(s){ (Math.random()<0.65)?createGroundObstacle(s):createFlyingObstacle(s); }
-
-  function spawnShuriken(s){
-    const b=s.shurikens.get(s.player.x+14,s.player.y-44,'px');
-    if(!b) return;
+  function spawnObstacle(s) {
+    (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
+  }
+  function spawnShuriken(s) {
+    const THROW_OFFSET = { x: 14, y: -44 };
+    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'px');
+    if (!b) return;
+    const speed = SHURIKEN_SPEED_BASE + s.difficulty * 20;
     b.setActive(true).setVisible(true).setDisplaySize(6,6);
     s.physics.world.enable(b);
-    b.body.setAllowGravity(false); b.setVelocityX(SHURIKEN_SPEED_BASE+s.difficulty*20);
+    b.body.setAllowGravity(false);
+    b.body.setSize(6,6).setOffset(0,0);
+    b.setVelocityX(speed);
+    b.setDepth(4.3);
+  }
+  function doThrow(s) {
+    if (s.gameOver || s.throwing) return;
+    if (s.arms) {
+      s.throwing = true;
+      s.arms.anims.play('arms-throw', true);
+      s.time.delayedCall(90, ()=> spawnShuriken(s));
+      s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+        s.throwing = false;
+        if (s.player.body.blocked.down) s.arms.anims.play('arms-run', true);
+      });
+    } else {
+      s.throwing = true;
+      spawnShuriken(s);
+      s.time.delayedCall(150, ()=>{ s.throwing = false; });
+    }
+  } else {
+      // Spritesheet mode: simple cooldown-based throw without extra overlay
+      s.throwing = true;
+      spawnShuriken(s);
+      s.time.delayedCall(150, ()=>{ s.throwing = false; });
+    }
+  });
   }
 
-  function doThrow(s){
-    if(s.gameOver||s.throwing) return;
-    s.throwing=true; spawnShuriken(s);
-    s.time.delayedCall(150,()=>{s.throwing=false;});
-  }
+  // ---------------- update ----------------
+  function update(time, delta) {
+    const s = this; if (s.gameOver) return;
 
-  function update(time,delta){
-    const s=this; if(s.gameOver) return;
-    const elapsed=s.time.now-s.startTime;
-    s.difficulty=Math.min(MAX_DIFF,Math.floor(elapsed/DIFF_EVERY_MS));
-    s.worldSpeed=SPEED+s.difficulty*SPEED_STEP;
+    const elapsed = s.time.now - s.startTime;
+    s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
+    s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
 
-    if((s.cursors.up.isDown||s.cursors.space.isDown)&&s.player.body.blocked.down) s.player.setVelocityY(JUMP_VELOCITY);
+    const dt = delta / 1000;
+    s.bgClouds.tilePositionX    += (s.worldSpeed * PARALLAX.clouds)     * dt;
+    s.bgMountains.tilePositionX += (s.worldSpeed * PARALLAX.mountains)  * dt;
+    s.bgHills.tilePositionX     += (s.worldSpeed * PARALLAX.hills)      * dt;
+    s.groundBack.tilePositionX  += (s.worldSpeed * PARALLAX.groundBack) * dt;
+    s.groundFront.tilePositionX += (s.worldSpeed * PARALLAX.groundFront)* dt;
 
-    if(time>s.nextSpawn){ spawnObstacle(s); s.nextSpawn=time+OBSTACLE_BASE_INTERVAL; }
+    if ((s.cursors.up.isDown || s.cursors.space.isDown) && s.player.body.blocked.down) s.player.setVelocityY(JUMP_VELOCITY);
 
-    s.shurikens.children.each(b=>{ if(b.active&&b.x>W+40)b.destroy(); });
-    s.obstacles.children.each(o=>{ if(o.active&&o.x<-40){o.destroy();s.score++;} });
-    s.scoreText.setText('SCORE '+Math.floor(s.score));
+    if (time > s.nextSpawn) {
+      spawnObstacle(s);
+      const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
+      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
+    }
+
+    s.shurikens.children.each(b => { if (b.active && b.x > W + 40) b.destroy(); });
+    s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+
+    s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 })();
 </script>
