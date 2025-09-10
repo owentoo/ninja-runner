@@ -37,9 +37,10 @@
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
-  // Jump forgiveness
+  // Jump forgiveness + variable height
   const COYOTE_TIME_MS = 120;   // grace after leaving ground
   const JUMP_BUFFER_MS = 120;   // grace before landing
+  const JUMP_CUTOFF_FACTOR = 0.5; // when released early, reduce upward velocity by 50%
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -84,10 +85,10 @@
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // NEW: Player run sprite sheet (8 frames, 48x55 each)
+    // Player run sprite sheet (8 frames, 48x55 each)
     this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
 
-    // Arms / throw placeholders (still used for throw overlay only)
+    // Arms / throw placeholders (overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
     for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
 
@@ -99,7 +100,6 @@
 
   // --------------- create (fallbacks only if PNGs missing) ---------------
   function ensureBGAndGroundTextures(s) {
-    // If a PNG didn't load (file missing), create a placeholder with the same key
     if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
     if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
     if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256, 70, 0x7b8fa6,0x000000, 8, 0.12);
@@ -117,7 +117,7 @@
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
 
-    // Parallax layers (use whichever textures exist — PNGs will win)
+    // Parallax layers
     s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
@@ -130,11 +130,11 @@
 
     // Player (use sprite sheet) + collider
     s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
-    s.player.body.setSize(36,50).setOffset(6,5); // tune to your art
+    s.player.body.setSize(36,50).setOffset(6,5); // tune to art
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
-    // Arms overlay used only for throws; keep it hidden during run
+    // Arms overlay for throws; hidden during run
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
@@ -145,7 +145,6 @@
       frameRate: 12,
       repeat: -1
     });
-    // keep arms-throw for the overlay
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
@@ -164,8 +163,15 @@
     // Jump buffering / coyote bookkeeping
     s.lastOnGroundAt = s.time.now;
     s.jumpQueuedAt   = -Infinity;
+    s.jumpReleased   = false;
+
+    // Buffer jumps when pressed
     s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
+
+    // Variable jump height: mark release
+    s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
 
     // UI
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
@@ -300,6 +306,13 @@
       s.jumpQueuedAt = -Infinity;
     }
     // ---------------------------------
+
+    // ----- Variable jump height (cut-off) -----
+    if (s.jumpReleased && s.player.body.velocity.y < 0) {
+      s.player.setVelocityY(s.player.body.velocity.y * JUMP_CUTOFF_FACTOR);
+      s.jumpReleased = false; // consume release
+    }
+    // ------------------------------------------
 
     if (time > s.nextSpawn) {
       spawnObstacle(s);
