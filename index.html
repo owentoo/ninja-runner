@@ -38,9 +38,15 @@
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
   // Jump forgiveness + variable height
-  const COYOTE_TIME_MS = 120;   // grace after leaving ground
-  const JUMP_BUFFER_MS = 120;   // grace before landing
-  const JUMP_CUTOFF_FACTOR = 0.5; // when released early, reduce upward velocity by 50%
+  const COYOTE_TIME_MS = 120;     // grace after leaving ground
+  const JUMP_BUFFER_MS = 120;     // grace before landing
+  const JUMP_CUTOFF_FACTOR = 0.5; // early-release reduces upward velocity
+
+  // Shuriken visuals
+  const SHURIKEN_DISPLAY = 20;    // on-screen size (px)
+  const SHURIKEN_BODY = 16;       // collision box (px)
+  const SHURIKEN_SPIN_RPS = 3.0;  // rotations per second (base)
+  const SHURIKEN_SPIN_VARIANCE = 1.0; // +/- rps variance for variety
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -87,6 +93,9 @@
 
     // Player run sprite sheet (8 frames, 48x55 each)
     this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
+
+    // NEW: shuriken art (single frame)
+    this.load.image('shuriken', 'shuriken.png');
 
     // Arms / throw placeholders (overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
@@ -240,24 +249,37 @@
   function spawnObstacle(s) {
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
   }
+
   function spawnShuriken(s) {
     // Respect group cap
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
 
     const THROW_OFFSET = { x: 14, y: -38 };
-    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'px');
+    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'shuriken');
     if (!b) return;
+
     const speed = SHURIKEN_SPEED_BASE + s.difficulty * 20;
-    b.setActive(true).setVisible(true).setDisplaySize(6,6);
+
+    b.setActive(true).setVisible(true).setOrigin(0.5);
+    b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
+
     s.physics.world.enable(b);
     b.body.setAllowGravity(false);
-    b.body.setSize(6,6).setOffset(0,0);
+    b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
+      (SHURIKEN_DISPLAY - SHURIKEN_BODY)/2,
+      (SHURIKEN_DISPLAY - SHURIKEN_BODY)/2
+    );
     b.setVelocityX(speed);
     b.setDepth(4.3);
+
+    // Spin forever (time-based). Randomize slightly per throw.
+    const rps = SHURIKEN_SPIN_RPS + Phaser.Math.FloatBetween(-SHURIKEN_SPIN_VARIANCE, SHURIKEN_SPIN_VARIANCE);
+    b.rotationSpeed = rps * Math.PI * 2; // radians/sec
 
     // Safety TTL
     s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
   }
+
   function doThrow(s) {
     if (s.gameOver || s.throwing) return;
     s.throwing = true;
@@ -283,6 +305,7 @@
     s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
 
     const dt = delta / 1000;
+
     s.bgClouds.tilePositionX    += (s.worldSpeed * PARALLAX.clouds)     * dt;
     s.bgMountains.tilePositionX += (s.worldSpeed * PARALLAX.mountains)  * dt;
     s.bgHills.tilePositionX     += (s.worldSpeed * PARALLAX.hills)      * dt;
@@ -305,7 +328,6 @@
       s.player.setVelocityY(JUMP_VELOCITY);
       s.jumpQueuedAt = -Infinity;
     }
-    // ---------------------------------
 
     // ----- Variable jump height (cut-off) -----
     if (s.jumpReleased && s.player.body.velocity.y < 0) {
@@ -314,13 +336,19 @@
     }
     // ------------------------------------------
 
+    // Shuriken spin + offscreen cleanup
+    s.shurikens.children.each(b => {
+      if (!b.active) return;
+      b.rotation += (b.rotationSpeed || 0) * dt;
+      if (b.x > W + 40) b.destroy();
+    });
+
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
     }
 
-    s.shurikens.children.each(b => { if (b.active && b.x > W + 40) b.destroy(); });
     s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
 
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
