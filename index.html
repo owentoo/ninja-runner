@@ -2,16 +2,15 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Phaser PNG‑first (with fallbacks) • Clean Restart</title>
+  <title>Ninja Runner — PNG-first with Fallbacks</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    /* Center canvas + hint within the viewport (vh/vw) */
+    /* Center canvas + hint */
     html, body {
       height: 100%; margin: 0;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       background: #f2f2f2;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
     #game { max-width: 900px; }
     .hint { font: 12px/1.4 monospace; color: #333; margin-top: 6px; text-align: center; }
@@ -26,7 +25,7 @@
 (() => {
   // ---------------- constants ----------------
   const W = 800, H = 300;
-  const FRAME = { w: 48, h: 55, ptero: { w: 48, h: 24 } };
+  const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const GROUND_Y = 250;
 
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
@@ -44,7 +43,7 @@
     backgroundColor: '#87ceeb',
     canvas: document.getElementById('game'),
     physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    scene: { key: 'main', preload, create, update }
+    scene: { preload, create, update }
   });
 
   // --------------- helper placeholder makers (only used if PNG missing) ---------------
@@ -69,7 +68,7 @@
     g.generateTexture(key, w, h); g.destroy();
   }
 
-  // ---------------- preload (PNG-first + spritesheet) ----------------
+  // ---------------- preload (PNG-first!) ----------------
   function preload() {
     // tiny pixel for bullets/floor
     solid(this, 'px', 2, 2, 0x000000);
@@ -81,14 +80,10 @@
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // NEW: Ninja run spritesheet (8 frames, each 48x55)
-    // Place file as ./ninja_run.png with 8 horizontal frames.
-    this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
-
-    // Fallback placeholders only used if spritesheet is missing
-    for (let i=0;i<4;i++) solid(this, 'base'+i, 48, 55, 0x7db8ff);
-    for (let i=0;i<2;i++) solid(this, 'arms'+i, 48, 55, 0xff8a8a);
-    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, 48, 55, 0xff5252);
+    // Player & obstacles placeholders (always generated)
+    for (let i=0;i<4;i++) solid(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff);
+    for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
+    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
     solid(this, 'cactusRect', 16, 26, 0x000000);
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
@@ -125,32 +120,19 @@
     // Floor collider
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
 
-    // --- Player using spritesheet if available ---
-    const hasSheet = s.textures.exists('ninjaRun');
-    if (hasSheet) {
-      // Create run animation from the sheet
-      s.anims.create({ key:'ninja-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start:0, end:7 }), frameRate: 12, repeat:-1 });
-      s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0)
-        .setOrigin(0.5,1)
-        .setCollideWorldBounds(true)
-        .setDepth(4.5);
-      s.player.body.setSize(36, 52).setOffset(6, 3);
-      s.player.play('ninja-run');
-      // We won't use separate arms when the sheet exists
-      s.arms = null;
-    } else {
-      // Fallback to blocky placeholders (old behavior)
-      s.player = s.physics.add.sprite(120, GROUND_Y, 'base0').setOrigin(0.5,1).setCollideWorldBounds(true);
-      s.player.body.setSize(36,44).setOffset(6,4);
-      s.player.setDepth(4.5);
-      s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6);
-      s.events.on('update', ()=>{ if (s.arms) { s.arms.x = s.player.x; s.arms.y = s.player.y; } });
-      s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
-      s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
-      s.player.play('base-run');
-      s.arms.play('arms-run');
-    }
+    // Player + arms
+    s.player = s.physics.add.sprite(120, GROUND_Y, 'base0').setOrigin(0.5,1).setCollideWorldBounds(true);
+    s.player.body.setSize(36,44).setOffset(6,4);
+    s.physics.add.collider(s.player, floor);
+    s.player.setDepth(4.5);
 
+    s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6);
+    s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
+
+    // Anims
+    s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
+    s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
+    s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
     // Physics groups
@@ -163,8 +145,7 @@
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     s.input.on('pointerdown', () => doThrow(s));
     keyX.on('down', () => doThrow(s));
-    // Robust restart: allow R at any time (not only after game over)
-    keyR.on('down', () => { s.scene.restart(); });
+    keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
     // UI
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
@@ -172,7 +153,6 @@
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
     // Collisions
-    s.physics.add.collider(s.player, floor);
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
       if (o.getData('destructible')) { b.destroy(); o.setTint(0xffff66); s.time.delayedCall(60, ()=>{ o.destroy(); s.score += (3 + s.difficulty * 0.5); }); }
       else { b.destroy(); }
@@ -182,11 +162,9 @@
     // Spawner bookkeeping
     s.nextSpawn = 0;
 
-    // Start anims (fallback only)
-    if (s.arms) {
-      s.player.play('base-run');
-      s.arms.play('arms-run');
-    }
+    // Start anims
+    s.player.play('base-run');
+    s.arms.play('arms-run');
   }
 
   // ---------------- helpers ----------------
@@ -214,7 +192,7 @@
     (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s);
   }
   function spawnShuriken(s) {
-    const THROW_OFFSET = { x: 14, y: -44 };
+    const THROW_OFFSET = { x: 14, y: -38 };
     const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'px');
     if (!b) return;
     const speed = SHURIKEN_SPEED_BASE + s.difficulty * 20;
@@ -227,26 +205,13 @@
   }
   function doThrow(s) {
     if (s.gameOver || s.throwing) return;
-    if (s.arms) {
-      s.throwing = true;
-      s.arms.anims.play('arms-throw', true);
-      s.time.delayedCall(90, ()=> spawnShuriken(s));
-      s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
-        s.throwing = false;
-        if (s.player.body.blocked.down) s.arms.anims.play('arms-run', true);
-      });
-    } else {
-      s.throwing = true;
-      spawnShuriken(s);
-      s.time.delayedCall(150, ()=>{ s.throwing = false; });
-    }
-  } else {
-      // Spritesheet mode: simple cooldown-based throw without extra overlay
-      s.throwing = true;
-      spawnShuriken(s);
-      s.time.delayedCall(150, ()=>{ s.throwing = false; });
-    }
-  });
+    s.throwing = true;
+    s.arms.anims.play('arms-throw', true);
+    s.time.delayedCall(90, ()=> spawnShuriken(s));
+    s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+      s.throwing = false;
+      if (s.player.body.blocked.down) s.arms.anims.play('arms-run', true);
+    });
   }
 
   // ---------------- update ----------------
