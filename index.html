@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html>
 <head>
@@ -119,6 +118,9 @@
     // Super banner (full height from top to ground)
     this.load.image('superBanner', 'super.png');
 
+    // Splash image
+    this.load.image('splash', 'splash.png');
+
     // Arms / throw placeholders (overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
     for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
@@ -155,6 +157,9 @@
     s._prevSpeedMult = 1.0;   // last applied to movers
     s.invincible = false;
 
+    // Splash state
+    s.waitingStart = true;
+
     // Parallax layers
     s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
@@ -176,6 +181,10 @@
     s.player.body.setSize(36,50).setOffset(6,5);
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
+
+    // Freeze player until SPACE (keep physics world running so colliders initialize correctly)
+    s.player.body.allowGravity = false;
+    s.player.setVelocity(0, 0);
 
     // Arms overlay for throws; hidden during run
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
@@ -210,66 +219,66 @@
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    s.input.on('pointerdown', () => doThrow(s));
-    keyX.on('down', () => doThrow(s));
-    keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
-    // Jump buffering / coyote bookkeeping
-    s.lastOnGroundAt = s.time.now;
-    s.jumpQueuedAt   = -Infinity;
-    s.jumpReleased   = false;
+    s.input.on('pointerdown', () => { if (!s.waitingStart) doThrow(s); });
+    keyX.on('down', () => { if (!s.waitingStart) doThrow(s); });
 
-    s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
-    s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
-    s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
+    // SPACE starts the game if on splash; else it jumps
+    s.input.keyboard.on('keydown-SPACE', () => {
+      if (s.waitingStart) { startGame(s); return; }
+      s.jumpQueuedAt = s.time.now;
+    });
     s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
+
+    // Also allow UP for jumping (once game started)
+    s.input.keyboard.on('keydown-UP', () => { if (!s.waitingStart) s.jumpQueuedAt = s.time.now; });
+    s.input.keyboard.on('keyup-UP',   () => { if (!s.waitingStart) s.jumpReleased = true; });
+
+    // R to restart only after game over (keep same behavior)
+    s.input.keyboard.on('keydown-R', () => { if (s.gameOver) s.scene.restart(); });
 
     // UI
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
     s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    // --- Collisions / Contacts ---
-
-    // Shuriken vs obstacles (single-hit guard)
-    s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
-      if (!b.active || !o.active) return;
-      if (o.getData('hit')) { b.destroy(); return; }
-      b.destroy();
-      if (o.getData('destructible')) {
-        o.setData('hit', true);
-        o.setTint(0xffff66);
-        s.time.delayedCall(60, ()=>{
-          if (o.active) o.destroy();
-          s.score += (3 + s.difficulty * 0.5);
-        });
-      }
-    });
-
-    // Player <-> obstacles:
-    // 1) Collider for normal play (game over)
-    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => {
-      if (!s.invincible) endGame(s);
-    });
-
-    // 2) Overlap always on; only zaps during SUPER (no pushback)
-    s.physics.add.overlap(s.player, s.obstacles, (player, o) => {
-      if (s.invincible) zapObstacle(s, o);
-    });
-
-    // Player vs collectible (activate power-up)
-    s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
-      if (!item.active) return;
-      item.destroy();
-      activatePowerUp(s);
-    });
-
     // Spawner bookkeeping
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start anims
+    // Splash image & hint
+    s.splash = s.add.image(W/2, H/2, 'splash').setOrigin(0.5).setDepth(1000);
+    const sw = s.textures.get('splash').getSourceImage().width;
+    const sh = s.textures.get('splash').getSourceImage().height;
+    const scale = Math.min(W / sw, H / sh);
+    s.splash.setScale(scale > 0 ? scale : 1);
+
+    s.splashHint = s.add.text(W/2, H - 20, 'Press SPACE to start', {
+      fontFamily:'monospace', fontSize:14, color:'#000'
+    }).setOrigin(0.5,1).setDepth(1001);
+
+    // NOTE: do NOT start base-run yet; do it in startGame()
+  }
+
+  function startGame(s) {
+    if (!s.waitingStart) return;
+    s.waitingStart = false;
+
+    // Remove splash
+    if (s.splash) s.splash.destroy();
+    if (s.splashHint) s.splashHint.destroy();
+
+    // Reset timing/spawners
+    s.startTime = s.time.now;
+    s.nextSpawn = 0;
+    s.nextCollectible = s.time.now + collectibleInterval();
+
+    // Enable gravity and start running
+    s.player.body.allowGravity = true;
     s.player.play('base-run');
+
+    // Make sure obstacle collider (created in create) is active
+    if (s._obstacleCollider) s._obstacleCollider.active = true;
   }
 
   // ---------------- helpers ----------------
@@ -281,7 +290,7 @@
     if (s.gameOver) return;
     s.gameOver = true;
 
-    // Stop physics & motion
+    // Stop physics & motion for game over
     s.physics.world.pause();
 
     // Stop anims
@@ -323,7 +332,6 @@
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
-      // ensure collider stays off
       if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
@@ -480,7 +488,7 @@
   }
 
   function doThrow(s) {
-    if (s.gameOver || s.throwing) return;
+    if (s.gameOver || s.throwing || s.waitingStart) return;
     s.throwing = true;
 
     s.arms.setVisible(true);
@@ -496,7 +504,11 @@
 
   // ---------------- update ----------------
   function update(time, delta) {
-    const s = this; if (s.gameOver) return;
+    const s = this;
+
+    // Hold everything on the splash until SPACE
+    if (s.waitingStart) return;
+    if (s.gameOver) return;
 
     const elapsed = s.time.now - s.startTime;
     s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
@@ -518,9 +530,9 @@
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
     const canCoyote   = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
-    const hasBuffered = (now - s.jumpQueuedAt)   <= JUMP_BUFFER_MS;
+    theHasBuffered = (now - s.jumpQueuedAt)   <= JUMP_BUFFER_MS;
 
-    if (hasBuffered && (s.player.body.blocked.down || canCoyote)) {
+    if (theHasBuffered && (s.player.body.blocked.down || canCoyote)) {
       s.player.setVelocityY(JUMP_VELOCITY);
       s.jumpQueuedAt = -Infinity;
     }
