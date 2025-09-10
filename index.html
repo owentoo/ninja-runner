@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Robust Restart</title>
+  <title>Ninja Runner — Destructible Ground Targets</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { height:100%; margin:0; background:#f2f2f2; }
@@ -17,11 +17,11 @@
 
 <script>
 (() => {
-  // Constants (do not change at runtime)
+  // --- Constants (fixed) ---
   const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const W = 800, H = 300, GROUND_Y = 250;
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
-  const OBSTACLE_BASE_INTERVAL = 1200; // ms
+  const OBSTACLE_BASE_INTERVAL = 1200;
 
   // Difficulty constants
   const MAX_DIFF = 8;
@@ -29,7 +29,11 @@
   const SPEED_STEP = 25;
   const INTERVAL_FACTOR = 0.92;
 
+  // Projectiles
   const SHURIKEN_SPEED_BASE = 600;
+
+  // Mix: probability a ground obstacle is a shootable "crate" instead of an indestructible cactus
+  const CRATE_PROBABILITY = 0.45; // ← tweak this (0.0–1.0)
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -39,40 +43,59 @@
     scene: { preload, create, update }
   });
 
-  // Helper: generate simple textures so no external PNGs are needed
+  // ---------- helpers to make textures ----------
   function makeRectTexture(scene, key, w, h, color, label) {
     const g = scene.add.graphics();
     g.fillStyle(color, 1).fillRect(0,0,w,h);
     g.lineStyle(2, 0x222222, 1).strokeRect(1,1,w-2,h-2);
     if (label !== undefined) {
-      const txt = scene.add.text(0,0, String(label), { fontFamily:'monospace', fontSize:12, color:'#000' });
+      const txt = scene.add.text(0,0, String(label), { fontFamily: 'monospace', fontSize: 12, color: '#000' });
       txt.setPosition((w - txt.width)/2, (h - txt.height)/2);
       const rt = scene.make.renderTexture({ x:0, y:0, width:w, height:h, add:false });
-      rt.draw(g,0,0); rt.draw(txt,0,0); rt.saveTexture(key);
-      txt.destroy(); g.destroy(); rt.destroy(); return;
+      rt.draw(g,0,0); rt.draw(txt,0,0);
+      rt.saveTexture(key);
+      txt.destroy(); g.destroy(); rt.destroy();
+      return;
     }
-    g.generateTexture(key, w, h); g.destroy();
+    g.generateTexture(key, w, h);
+    g.destroy();
+  }
+
+  function makeCrateTexture(scene, key, w, h) {
+    const g = scene.add.graphics();
+    // body
+    g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
+    // border + planks
+    g.lineStyle(2, 0x3f2d14, 1).strokeRect(1,1,w-2,h-2);
+    g.lineStyle(1, 0x3f2d14, 1);
+    g.strokeLineShape(new Phaser.Geom.Line(3, h-10, w-3, h-10));
+    g.strokeLineShape(new Phaser.Geom.Line(3, 10, w-3, 10));
+    g.strokeLineShape(new Phaser.Geom.Line(6, 3, 6, h-3));
+    g.strokeLineShape(new Phaser.Geom.Line(w-6, 3, w-6, h-3));
+    g.generateTexture(key, w, h);
+    g.destroy();
   }
 
   function preload() {
-    // 2×2 px texture for ground/bullets
+    // 2×2 px for ground/bullets
     const g = this.add.graphics();
     g.fillStyle(0x000000, 1).fillRect(0, 0, 2, 2);
     g.generateTexture('px', 2, 2);
     g.destroy();
 
-    // Self-generated placeholder frames
-    for (let i=0;i<4;i++) makeRectTexture(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff, i);
-    for (let i=0;i<2;i++) makeRectTexture(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a, i);
-    for (let i=0;i<2;i++) makeRectTexture(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252, i);
-    makeRectTexture(this, 'cactusRect', 16, 26, 0x000000);
-    for (let i=0;i<2;i++) makeRectTexture(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
+    // Self-generated placeholder frames (no external PNGs)
+    for (let i=0;i<4;i++) makeRectTexture(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff, i);      // base run 0..3
+    for (let i=0;i<2;i++) makeRectTexture(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a, i);      // arms run 0..1
+    for (let i=0;i<2;i++) makeRectTexture(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252, i); // arms throw 0..1
+    makeRectTexture(this, 'cactusRect', 16, 26, 0x000000);                                     // cactus (indestructible)
+    makeCrateTexture(this, 'crateRect', 18, 20);                                               // crate (destructible)
+    for (let i=0;i<2;i++) makeRectTexture(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000); // flying 0..1
   }
 
   function create() {
     const s = this;
 
-    // ---------------- Scene-scoped state (robust restart) ----------------
+    // Scene-scoped state (robust restart)
     s.gameOver   = false;
     s.throwing   = false;
     s.score      = 0;
@@ -92,7 +115,7 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(s.player.depth+1);
     s.events.on('update', () => { s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // Animations
+    // Anims
     s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
     s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
@@ -116,7 +139,19 @@
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5);
 
     // Collisions
-    s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{ b.destroy(); o.destroy(); s.score += (1 + s.difficulty * 0.1); });
+    s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
+      // Only destroy obstacles that are destructible
+      if (o.getData('destructible')) {
+        b.destroy();
+        // tiny hit flash
+        o.setTint(0xffff66);
+        s.time.delayedCall(60, () => { o.destroy(); s.score += (3 + s.difficulty * 0.5); });
+      } else {
+        // shuriken poofs on cactus
+        b.destroy();
+      }
+    });
+
     s.physics.add.collider(s.player, s.obstacles, () => endGame(s));
 
     // Spawner bookkeeping
@@ -127,7 +162,7 @@
     s.arms.play('arms-run');
   }
 
-  // ---- Scene helpers (use scene-scoped state) ----
+  // ---- Scene helpers ----
   function endGame(s) {
     if (s.gameOver) return;
     s.gameOver = true;
@@ -137,15 +172,19 @@
   }
 
   function createGroundObstacle(s) {
-    return s.obstacles.create(W + 20, GROUND_Y, 'cactusRect')
-      .setOrigin(0.5,1)
-      .setVelocityX(-s.worldSpeed);
+    // Decide cactus (indestructible) or crate (destructible)
+    const makeCrate = Math.random() < CRATE_PROBABILITY;
+    const key = makeCrate ? 'crateRect' : 'cactusRect';
+    const o = s.obstacles.create(W + 20, GROUND_Y, key).setOrigin(0.5,1).setVelocityX(-s.worldSpeed);
+    o.setData('destructible', !!makeCrate);
+    return o;
   }
 
   function createFlyingObstacle(s) {
     const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0').setOrigin(0.5,1);
     f.play('ptero-fly');
     f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50));
+    f.setData('destructible', false); // flying stays unshootable here (can change later)
     return f;
   }
 
@@ -179,7 +218,6 @@
 
   function update(time, delta) {
     const s = this;
-
     if (s.gameOver) return;
 
     // Difficulty progression
@@ -195,7 +233,7 @@
       s.player.setVelocityY(JUMP_VELOCITY);
     }
 
-    // Spawning with difficulty-scaled interval
+    // Spawn with difficulty-scaled interval
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
@@ -204,7 +242,13 @@
 
     // Cleanup & passive score
     s.shurikens.children.each(b => { if (b.active && b.x > W + 40) b.destroy(); });
-    s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+    s.obstacles.children.each(o => {
+      if (o.active && o.x < -40) {
+        o.destroy();
+        // small travel bonus regardless of type
+        s.score += (1 + s.difficulty * 0.1);
+      }
+    });
 
     // UI
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
@@ -213,4 +257,3 @@
 </script>
 </body>
 </html>
-
