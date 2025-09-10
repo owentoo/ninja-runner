@@ -98,7 +98,7 @@
 
   // ---------------- preload ----------------
   function preload() {
-    // tiny pixel for bullets/floor
+    // tiny pixel for bullets/floor & particles
     solid(this, 'px', 2, 2, 0x000000);
 
     // Background / ground
@@ -180,6 +180,20 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
+    // --- SUPER TRAIL (particles), initially off ---
+    s.trailParticles = s.add.particles(0, 0, 'px', {
+      lifespan: 220,
+      speed: 0,
+      quantity: 1,
+      frequency: 22,
+      scale: { start: 1.1, end: 0 },
+      alpha: { start: 0.65, end: 0 },
+      tint: 0x8ef1ff,
+      follow: s.player,
+      blendMode: 'ADD'
+    });
+    s.trailParticles.stop();
+
     // Anims
     s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
@@ -229,8 +243,16 @@
       }
     });
 
-    // Player vs obstacles (respect invincibility)
-    s.physics.add.collider(s.player, s.obstacles, () => { if (!s.invincible) endGame(s); });
+    // Player vs obstacles:
+    // - normal: game over
+    // - SUPER: zap anything touched
+    s.physics.add.collider(s.player, s.obstacles, (player, o) => {
+      if (s.invincible) {
+        zapObstacle(s, o);
+      } else {
+        endGame(s);
+      }
+    });
 
     // Player vs collectible (activate power-up)
     s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
@@ -274,12 +296,21 @@
     s.player.clearTint();
     s.invincible = false;
     s.speedMult = 1.0;
+    if (s.trailParticles) s.trailParticles.stop();
 
     s.gameOverTxt.setText('GAME OVER');
     s.restartTxt.setText('Press R to Restart');
   }
 
-  // ----- Power-up: speed + invincible + full-height banner + warning blink -----
+  // Zap/destroy any obstacle the ninja touches while invincible
+  function zapObstacle(s, o) {
+    if (!o || !o.active) return;
+    o.setTint(0x99fffd);
+    s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); });
+    s.score += 2; // tiny bonus for smashing through
+  }
+
+  // ----- Power-up: speed + invincible + full-height banner + warning blink + trail -----
   function activatePowerUp(s) {
     // If already active, refresh timers & reset warning setup
     if (s.invincible) {
@@ -288,6 +319,7 @@
       stopBlink(s); // in case warning had started
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
+      if (s.trailParticles) s.trailParticles.start();
       return;
     }
 
@@ -295,6 +327,7 @@
     s.speedMult = POWERUP_SPEED_MULT;
     s.player.setTint(0x8ef1ff); // subtle cyan tint
     s.superBanner.setVisible(true);
+    if (s.trailParticles) s.trailParticles.start();
 
     // Re-scale existing movers’ velocities to match new multiplier
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
@@ -309,6 +342,7 @@
     s.speedMult = 1.0;
     s.player.clearTint();
     s.superBanner.setVisible(false);
+    if (s.trailParticles) s.trailParticles.stop();
 
     // Cancel timers & blink
     if (s._powerupTimer) s._powerupTimer.remove(false);
@@ -329,7 +363,7 @@
       alpha: 0.45,
       duration: 120,
       yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 // enough pulses for ~1s
+      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
     });
 
     // Banner blink (alpha pulse)
