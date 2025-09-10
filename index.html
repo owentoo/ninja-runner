@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — PNG-first with Fallbacks</title>
+  <title>Ninja Runner — 900×600, 2× Scale</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body {
@@ -23,9 +23,10 @@
 <script>
 (() => {
   // ---------------- constants ----------------
-  const W = 800, H = 300;
+  const SCALE = 2;                 // uniform visual & hitbox scale
+  const W = 900, H = 600;
   const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
-  const GROUND_Y = 250;
+  const GROUND_Y = Math.round(H * (250/300)); // keep original ground proportion ≈ 500
 
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
   const OBSTACLE_BASE_INTERVAL = 1200;
@@ -33,27 +34,26 @@
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
 
-  // Ground spawns: chance to use the running enemy (mirror ninja)
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
-  // Jump forgiveness + variable height
+  // Jump
   const COYOTE_TIME_MS = 120;
   const JUMP_BUFFER_MS = 120;
   const JUMP_CUTOFF_FACTOR = 0.5;
 
-  // Shuriken visuals
-  const SHURIKEN_DISPLAY = 20;
-  const SHURIKEN_BODY = 16;
+  // Shuriken visuals (2×)
+  const SHURIKEN_DISPLAY = 20 * SCALE;   // 40
+  const SHURIKEN_BODY    = 16 * SCALE;   // 32
   const SHURIKEN_SPIN_RPS = 3.0;
   const SHURIKEN_SPIN_VARIANCE = 1.0;
 
   // Power-up (collectible)
-  const POWERUP_SPEED_MULT = 5.0;          // 5x speed
-  const POWERUP_DURATION_MS = 6000;        // 6s
-  const POWERUP_WARN_MS = 1000;            // last 1s blink warning
-  const COLLECTIBLE_BASE_INTERVAL = 10000; // average 15s
+  const POWERUP_SPEED_MULT = 5.0;
+  const POWERUP_DURATION_MS = 6000;
+  const POWERUP_WARN_MS = 1000;
+  const COLLECTIBLE_BASE_INTERVAL = 10000;
   const COLLECTIBLE_INTERVAL_JITTER = 4000;
 
   new Phaser.Game({
@@ -79,7 +79,7 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrate(scene) { // keeps old crate texture around (not used as spawn)
+  function makeCrate(scene) {
     const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
@@ -88,10 +88,10 @@
   }
   function makeCollectibleTex(scene) {
     const key='collectible';
-    const size=20;
+    const size=20 * SCALE; // 40px circle at 2×
     const g = scene.add.graphics();
     g.fillStyle(0xfff066, 1).fillCircle(size/2, size/2, size/2);
-    g.lineStyle(2, 0xffb200, 1).strokeCircle(size/2, size/2, (size/2)-1);
+    g.lineStyle(2 * SCALE, 0xffb200, 1).strokeCircle(size/2, size/2, (size/2)-1);
     g.generateTexture(key, size, size);
     g.destroy();
   }
@@ -127,19 +127,18 @@
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
 
-    // Collectible placeholder
+    // Collectible placeholder (generated at 2×)
     makeCollectibleTex(this);
-    // If you have a file named collectible.png it will replace the placeholder
-    this.load.image('collectible', 'collectible.png');
+    this.load.image('collectible', 'collectible.png'); // will override if present
   }
 
   // ---------------- create ----------------
   function ensureBGAndGroundTextures(s) {
-    if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
-    if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
-    if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256, 70, 0x7b8fa6,0x000000, 8, 0.12);
-    if (!s.textures.exists('groundBackTile'))  makePattern(s, 'groundBackTile', 128, 18, 0x8b5a2b, 0x000000, 6, 0.18);
-    if (!s.textures.exists('groundFrontTile')) makePattern(s, 'groundFrontTile',128, 28, 0x6b3f1f, 0x000000, 6, 0.20);
+    if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256*SCALE, 80*SCALE, 0xffffff, 0x000000, 8, 0.10);
+    if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256*SCALE, 90*SCALE, 0xa0b1c2,0x000000,10, 0.12);
+    if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256*SCALE, 70*SCALE, 0x7b8fa6,0x000000, 8, 0.12);
+    if (!s.textures.exists('groundBackTile'))  makePattern(s, 'groundBackTile', 128*SCALE, 18*SCALE, 0x8b5a2b, 0x000000, 6, 0.18);
+    if (!s.textures.exists('groundFrontTile')) makePattern(s, 'groundFrontTile',128*SCALE, 28*SCALE, 0x6b3f1f, 0x000000, 6, 0.20);
   }
 
   function create() {
@@ -150,47 +149,40 @@
     // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
-    s.speedMult = 1.0;        // current target speed multiplier (1.0 or 3.0)
-    s._prevSpeedMult = 1.0;   // last applied to movers
-    s.invincible = false;
+    s.speedMult = 1.0; s._prevSpeedMult = 1.0; s.invincible = false;
 
-    // Parallax layers
-    s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
-    s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
-    s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
+    // Parallax layers (double the Y placements)
+    s.bgClouds    = s.add.tileSprite(0, 120, W*2, 80*SCALE, 'bgClouds').setOrigin(0,0).setDepth(0);
+    s.bgMountains = s.add.tileSprite(0, 180, W*2, 90*SCALE, 'bgMountains').setOrigin(0,0).setDepth(1);
+    s.bgHills     = s.add.tileSprite(0, 260, W*2, 70*SCALE, 'bgHills').setOrigin(0,0).setDepth(2);
 
-    // Super banner layer (fill from top to ground, above bg but below ground)
-    const superHeight = GROUND_Y; // full vertical up to ground
+    // Super banner layer (full height up to ground)
+    const superHeight = GROUND_Y;
     s.superBanner = s.add.tileSprite(0, 0, W*2, superHeight, 'superBanner')
       .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
 
-    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
-    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
+    s.groundBack  = s.add.tileSprite(0, GROUND_Y - 8*SCALE,  W*2, 18*SCALE, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
+    s.groundFront = s.add.tileSprite(0, GROUND_Y - 2*SCALE,  W*2, 28*SCALE, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
 
-    // Floor collider
-    const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
+    // Floor collider (thicker at 2×)
+    const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W, 4*SCALE).refreshBody();
 
     // Player
-    s.player = s.physics.add.sprite(120, GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
-    s.player.body.setSize(36,50).setOffset(6,5);
+    s.player = s.physics.add.sprite(120*SCALE, GROUND_Y, 'ninjaRun', 0)
+      .setOrigin(0.5,1).setCollideWorldBounds(true).setDepth(4.5).setScale(SCALE);
+    s.player.body.setSize(36*SCALE, 50*SCALE).setOffset(6*SCALE, 5*SCALE);
     s.physics.add.collider(s.player, floor);
-    s.player.setDepth(4.5);
 
-    // Arms overlay for throws; hidden during run
-    s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
+    // Arms overlay
+    s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0')
+      .setOrigin(0.5,1).setDepth(4.6).setVisible(false).setScale(SCALE);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // --- SUPER TRAIL (particles), initially off ---
+    // Trail particles
     s.trailParticles = s.add.particles(0, 0, 'px', {
-      lifespan: 220,
-      speed: 0,
-      quantity: 1,
-      frequency: 22,
-      scale: { start: 1.1, end: 0 },
-      alpha: { start: 0.65, end: 0 },
-      tint: 0x8ef1ff,
-      follow: s.player,
-      blendMode: 'ADD'
+      lifespan: 220, speed: 0, quantity: 1, frequency: 22,
+      scale: { start: 1.1*SCALE, end: 0 }, alpha: { start: 0.65, end: 0 },
+      tint: 0x8ef1ff, follow: s.player, blendMode: 'ADD'
     });
     s.trailParticles.stop();
 
@@ -201,9 +193,9 @@
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
     // Physics groups
-    s.obstacles   = s.physics.add.group({ allowGravity:false, immovable:true });
-    s.collectibles= s.physics.add.group({ allowGravity:false, immovable:true });
-    s.shurikens   = s.physics.add.group({ maxSize: 12 });
+    s.obstacles    = s.physics.add.group({ allowGravity:false, immovable:true });
+    s.collectibles = s.physics.add.group({ allowGravity:false, immovable:true });
+    s.shurikens    = s.physics.add.group({ maxSize: 12 });
 
     // Input
     s.cursors = s.input.keyboard.createCursorKeys();
@@ -224,9 +216,9 @@
     s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
 
     // UI
-    s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
-    s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
-    s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
+    s.scoreText   = s.add.text(14*SCALE, 12*SCALE, 'SCORE 0', { fontFamily:'monospace', fontSize:16*SCALE, color:'#000' }).setDepth(10);
+    s.gameOverTxt = s.add.text(W/2, H/2 - 10*SCALE, '', { fontFamily:'monospace', fontSize:20*SCALE, color:'#000' }).setOrigin(0.5).setDepth(10);
+    s.restartTxt  = s.add.text(W/2, H/2 + 16*SCALE, '', { fontFamily:'monospace', fontSize:14*SCALE, color:'#000' }).setOrigin(0.5).setDepth(10);
 
     // --- Collisions / Contacts ---
 
@@ -303,42 +295,36 @@
     s.restartTxt.setText('Press R to Restart');
   }
 
-  // Zap/destroy any obstacle the ninja touches while invincible
   function zapObstacle(s, o) {
     if (!o || !o.active) return;
     o.setTint(0x99fffd);
     s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); });
-    s.score += 2; // tiny bonus for smashing through
+    s.score += 2;
   }
 
-  // ----- Power-up: speed + invincible + full-height banner + warning blink + trail -----
+  // ----- Power-up: speed + invincible + banner + warning blink + trail -----
   function activatePowerUp(s) {
-    // Already active? Refresh timers, keep collider disabled, keep trail
     if (s.invincible) {
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
-      stopBlink(s); // reset warning pulses
+      stopBlink(s);
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
-      // ensure collider stays off
       if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
 
     s.invincible = true;
     s.speedMult = POWERUP_SPEED_MULT;
-    s.player.setTint(0x8ef1ff); // subtle cyan tint
+    s.player.setTint(0x8ef1ff);
     s.superBanner.setVisible(true);
     if (s.trailParticles) s.trailParticles.start();
 
-    // Disable collider so obstacles don't push ninja back
     if (s._obstacleCollider) s._obstacleCollider.active = false;
 
-    // Re-scale existing movers’ velocities to match new multiplier
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
 
-    // Timers
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
     s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
   }
@@ -350,44 +336,24 @@
     s.superBanner.setVisible(false);
     if (s.trailParticles) s.trailParticles.stop();
 
-    // Re-enable collider for normal play
     if (s._obstacleCollider) s._obstacleCollider.active = true;
 
-    // Cancel timers & blink
     if (s._powerupTimer) s._powerupTimer.remove(false);
     if (s._warnTimer) s._warnTimer.remove(false);
     stopBlink(s);
 
-    // Adjust movers back down
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
   }
 
   function startBlink(s) {
-    // Safety: avoid duplicates
     stopBlink(s);
-
-    // Ninja blink (alpha pulse)
-    s._blinkTweenPlayer = s.tweens.add({
-      targets: s.player,
-      alpha: 0.45,
-      duration: 120,
-      yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
-    });
-
-    // Banner blink (alpha pulse)
-    s._blinkTweenBanner = s.tweens.add({
-      targets: s.superBanner,
-      alpha: 0.4,
-      duration: 120,
-      yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
-    });
+    s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 });
+    s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 });
   }
 
   function stopBlink(s) {
-    if (s._blinkTweenPlayer) { s._blinkTweenPlayer.stop(); s._blinkTweenPlayer = null; }
-    if (s._blinkTweenBanner) { s._blinkTweenBanner.stop(); s._blinkTweenBanner = null; }
+    if (s._blinkTweenPlayer) { s._blinkTweenPlayer.stop(); s._blinkTweenPlayer=null; }
+    if (s._blinkTweenBanner) { s._blinkTweenBanner.stop(); s._blinkTweenBanner=null; }
     if (s.player) s.player.setAlpha(1);
     if (s.superBanner) s.superBanner.setAlpha(0.9);
   }
@@ -395,40 +361,39 @@
   function rescaleMoversForSpeedChange(s, prevMult, newMult) {
     if (prevMult === newMult) return;
     const scale = newMult / prevMult;
-
     s.obstacles.children.each(o => { if (o.active && o.body && o.body.velocity) o.body.velocity.x *= scale; });
     s.collectibles.children.each(c => { if (c.active && c.body && c.body.velocity) c.body.velocity.x *= scale; });
     s.shurikens.children.each(b => { if (b.active && b.body && b.body.velocity) b.body.velocity.x *= scale; });
-
     s._prevSpeedMult = newMult;
   }
-  // ---------------------------------------------------
 
+  // ---------------------------------------------------
   // Spawns
   function createGroundObstacle(s) {
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
 
     if (makeEnemy) {
-      const e = s.obstacles.create(W + 20, GROUND_Y, 'enemyRun', 0)
-        .setOrigin(0.5,1).setDepth(4.2);
+      const e = s.obstacles.create(W + 20*SCALE, GROUND_Y, 'enemyRun', 0)
+        .setOrigin(0.5,1).setDepth(4.2).setScale(SCALE);
       e.play('enemy-run');
       e.setVelocityX(-(s.worldSpeed * s.speedMult));
-      e.body.setSize(36,50).setOffset(6,5);
+      e.body.setSize(36*SCALE, 50*SCALE).setOffset(6*SCALE, 5*SCALE);
       e.setData('destructible', true);
       return e;
     } else {
-      const c = s.obstacles.create(W + 20, GROUND_Y, 'cactusRect')
-        .setOrigin(0.5,1).setDepth(4.2);
+      const c = s.obstacles.create(W + 20*SCALE, GROUND_Y, 'cactusRect')
+        .setOrigin(0.5,1).setDepth(4.2).setScale(SCALE);
       c.setVelocityX(-(s.worldSpeed * s.speedMult));
-      c.body.setSize(c.width, c.height).setOffset(0,0);
+      // keep body proportional to visual scale
+      c.body.setSize(c.width * SCALE, c.height * SCALE).setOffset(0,0);
       c.setData('destructible', false);
       return c;
     }
   }
 
   function createFlyingObstacle(s) {
-    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0')
-      .setOrigin(0.5,1).setDepth(4.2);
+    const f = s.obstacles.create(W + 20*SCALE, Phaser.Math.Between(GROUND_Y-110*SCALE, GROUND_Y-60*SCALE), 'ptero0')
+      .setOrigin(0.5,1).setDepth(4.2).setScale(SCALE);
     f.play('ptero-fly');
     f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50) * s.speedMult);
     f.setData('destructible', true);
@@ -440,31 +405,22 @@
   }
 
   function spawnCollectible(s) {
-    // Spawn in a safe “lane” above ground enemies, below flyers
-    const y = Phaser.Math.Between(GROUND_Y - 90, GROUND_Y - 60);
-    const item = s.collectibles.create(W + 20, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
+    const y = Phaser.Math.Between(GROUND_Y - 90*SCALE, GROUND_Y - 60*SCALE);
+    const item = s.collectibles.create(W + 20*SCALE, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
+    item.setScale(2.2); // was 1.1 → doubled
     item.setVelocityX(-(s.worldSpeed * s.speedMult));
-    // Make it pop a little
-    item.setScale(1.1);
-    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 400, repeat: -1 });
+    s.tweens.add({ targets: item, scale: 2.0, yoyo: true, duration: 400, repeat: -1 });
     return item;
   }
 
   function spawnShuriken(s) {
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
 
-    const THROW_OFFSET = { x: 14, y: -38 };
-
-    // ✅ Use group.create so the body is properly registered with Arcade Physics
+    const THROW_OFFSET = { x: 14*SCALE, y: -38*SCALE };
     const b = s.shurikens.create(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'shuriken')
-      .setOrigin(0.5)
-      .setActive(true)
-      .setVisible(true)
-      .setDepth(4.3);
+      .setOrigin(0.5).setActive(true).setVisible(true).setDepth(4.3);
 
     b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
-
-    // Body setup
     b.body.setAllowGravity(false);
     b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
       (SHURIKEN_DISPLAY - SHURIKEN_BODY)/2,
@@ -505,14 +461,14 @@
 
     const dt = delta / 1000;
 
-    // Parallax + banner scroll (speed respects power-up)
+    // Parallax + banner scroll
     const scroll = s.worldSpeed * s.speedMult;
     s.bgClouds.tilePositionX    += (scroll * PARALLAX.clouds)     * dt;
     s.bgMountains.tilePositionX += (scroll * PARALLAX.mountains)  * dt;
     s.bgHills.tilePositionX     += (scroll * PARALLAX.hills)      * dt;
-    if (s.superBanner.visible)   s.superBanner.tilePositionX      += (scroll * 0.90) * dt;
-    s.groundBack.tilePositionX  += (scroll * PARALLAX.groundBack) * dt;
-    s.groundFront.tilePositionX += (scroll * PARALLAX.groundFront)* dt;
+    if (s.superBanner.visible)    s.superBanner.tilePositionX      += (scroll * 0.90) * dt;
+    s.groundBack.tilePositionX   += (scroll * PARALLAX.groundBack) * dt;
+    s.groundFront.tilePositionX  += (scroll * PARALLAX.groundFront)* dt;
 
     // Coyote + Jump Buffer
     const now = s.time.now;
@@ -536,7 +492,7 @@
     s.shurikens.children.each(b => {
       if (!b.active) return;
       b.rotation += (b.rotationSpeed || 0) * dt;
-      if (b.x > W + 40) b.destroy();
+      if (b.x > W + 40*SCALE) b.destroy();
     });
 
     // Spawns
@@ -552,8 +508,8 @@
     }
 
     // Cleanup when off left
-    s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
-    s.collectibles.children.each(c => { if (c.active && c.x < -40) c.destroy(); });
+    s.obstacles.children.each(o => { if (o.active && o.x < -40*SCALE) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+    s.collectibles.children.each(c => { if (c.active && c.x < -40*SCALE) c.destroy(); });
 
     // UI
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
