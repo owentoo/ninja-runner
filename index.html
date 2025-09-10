@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Self-Contained (no external assets)</title>
+  <title>Ninja Runner — Difficulty Scaling</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { height:100%; margin:0; background:#f2f2f2; }
@@ -13,22 +13,32 @@
 </head>
 <body>
 <canvas id="game"></canvas>
-<div class="hint">
-  ↑/SPACE = jump • X/click = throw • R = restart
-</div>
+<div class="hint">↑/SPACE = jump • X/click = throw • R = restart</div>
 
 <script>
 (() => {
   const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const W = 800, H = 300;
   const GROUND_Y = 250;
-  const SPEED = 300;
+
+  // Base tuning
+  const SPEED = 300;              // base world speed
   const GRAVITY = 1400;
   const JUMP_VELOCITY = -520;
-  const OBSTACLE_BASE_INTERVAL = 1200;
-  const SHURIKEN_SPEED = 600;
+  const OBSTACLE_BASE_INTERVAL = 1200; // ms base gap
 
-  let score = 0, gameOver = false, throwing = false;
+  // Difficulty scaling
+  let worldSpeed = SPEED;         // dynamic speed used everywhere
+  let difficulty = 0;             // increases over time
+  const MAX_DIFF = 8;             // cap difficulty
+  const DIFF_EVERY_MS = 15000;    // level up every 15s
+  const SPEED_STEP = 25;          // +25 px/s per level
+  const INTERVAL_FACTOR = 0.92;   // spawn interval shrinks ~8% per level
+
+  // Projectiles scale a touch with difficulty
+  const SHURIKEN_SPEED_BASE = 600;
+
+  let score = 0, gameOver = false, throwing = false, startTime = 0;
 
   new Phaser.Game({
     type: Phaser.CANVAS,
@@ -38,21 +48,18 @@
     scene: { preload, create, update }
   });
 
+  // ---------- helpers to make textures ----------
   function makeRectTexture(scene, key, w, h, color, label) {
     const g = scene.add.graphics();
     g.fillStyle(color, 1).fillRect(0,0,w,h);
-    // border
     g.lineStyle(2, 0x222222, 1).strokeRect(1,1,w-2,h-2);
     if (label !== undefined) {
       const txt = scene.add.text(0,0, String(label), { fontFamily: 'monospace', fontSize: 12, color: '#000' });
       txt.setPosition((w - txt.width)/2, (h - txt.height)/2);
-      txt.visible = true;
-      txt.setScrollFactor(0);
       const rt = scene.make.renderTexture({ x:0, y:0, width:w, height:h, add:false });
-      rt.draw(g,0,0);
-      rt.draw(txt,0,0);
+      rt.draw(g,0,0); rt.draw(txt,0,0);
       rt.saveTexture(key);
-      g.destroy(); txt.destroy(); rt.destroy();
+      txt.destroy(); g.destroy(); rt.destroy();
       return;
     }
     g.generateTexture(key, w, h);
@@ -60,44 +67,29 @@
   }
 
   function preload() {
-    // 2×2 pixel for ground + bullets
+    // 2×2 px for ground/bullets
     const g = this.add.graphics();
     g.fillStyle(0x000000, 1).fillRect(0, 0, 2, 2);
     g.generateTexture('px', 2, 2);
     g.destroy();
 
-    // --------------------------------------------
-    // Self-generated placeholder "spritesheets"
-    // base run frames: base0..base3 (blue)
-    for (let i=0;i<4;i++) makeRectTexture(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff, i);
-    // arms run frames: arms0..arms1 (red)
-    for (let i=0;i<2;i++) makeRectTexture(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a, i);
-    // arms throw frames: armsThrow0..armsThrow1
-    for (let i=0;i<2;i++) makeRectTexture(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252, i);
-    // cactus (single)
-    makeRectTexture(this, 'cactusRect', 16, 26, 0x000000);
-    // ptero frames
-    for (let i=0;i<2;i++) makeRectTexture(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
-
-    // If you want to use your actual PNG sheets later, comment the blocks above
-    // and uncomment this block (make sure files are beside index.html):
-    /*
-    this.load.spritesheet('ninja_base', 'ninja_base_placeholder.png', { frameWidth: 48, frameHeight: 48 });
-    this.load.spritesheet('ninja_arms', 'ninja_arms_placeholder.png', { frameWidth: 48, frameHeight: 48 });
-    this.load.image('cactus', 'cactus_placeholder.png');
-    this.load.spritesheet('ptero', 'ptero_placeholder.png', { frameWidth: 48, frameHeight: 24 });
-    */
+    // Self-generated placeholder frames (no external PNGs)
+    for (let i=0;i<4;i++) makeRectTexture(this, 'base'+i, FRAME.w, FRAME.h, 0x7db8ff, i);      // base run 0..3
+    for (let i=0;i<2;i++) makeRectTexture(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a, i);      // arms run 0..1
+    for (let i=0;i<2;i++) makeRectTexture(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252, i); // arms throw 0..1
+    makeRectTexture(this, 'cactusRect', 16, 26, 0x000000);                                     // ground obstacle
+    for (let i=0;i<2;i++) makeRectTexture(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000); // flying 0..1
   }
 
   function create() {
     const s = this;
-    console.log('Scene create');
+    startTime = s.time.now;
 
-    // Ground + floor
+    // Ground line + floor collider
     const ground = s.add.tileSprite(0, GROUND_Y+10, W*2, 2, 'px').setOrigin(0,0.5).setTint(0x333333);
     const floor  = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
 
-    // Player base (use base0 frame) and arms (arms0)
+    // Player (base has physics; arms overlays)
     const player = s.physics.add.sprite(120, GROUND_Y, 'base0').setOrigin(0.5,1).setCollideWorldBounds(true);
     player.body.setSize(36,44).setOffset(6,4);
     s.physics.add.collider(player, floor);
@@ -105,23 +97,24 @@
     const arms = s.add.sprite(player.x, player.y, 'arms0').setOrigin(0.5,1).setDepth(player.depth+1);
     s.events.on('update', () => { arms.x = player.x; arms.y = player.y; });
 
-    // Create animations from the generated frames
-    s.anims.create({ key:'base-run', frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
-    s.anims.create({ key:'arms-run', frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
-    s.anims.create({ key:'arms-throw', frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
-
-    // Ptero anim
+    // Animations
+    s.anims.create({ key:'base-run',  frames:[{key:'base0'},{key:'base1'},{key:'base2'},{key:'base3'}], frameRate:10, repeat:-1 });
+    s.anims.create({ key:'arms-run',  frames:[{key:'arms0'},{key:'arms1'}], frameRate:10, repeat:-1 });
+    s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
-    const obstacles = s.physics.add.group();
+    // Obstacles: gravity-free & immovable (Option A)
+    const obstacles = s.physics.add.group({ allowGravity: false, immovable: true });
     const shurikens = s.physics.add.group({ maxSize: 12 });
 
+    // Input
     const cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    s.input.on('pointerdown', () => doThrow(s));
-    keyX.on('down', () => doThrow(s));
+    s.input.on('pointerdown', () => doThrow(s, player, arms, shurikens));
+    keyX.on('down', () => doThrow(s, player, arms, shurikens));
 
+    // UI
     const scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' });
     const gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5);
     const restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5);
@@ -135,38 +128,41 @@
     }
     keyR.on('down', () => { if (gameOver) s.scene.restart(); });
 
-    s.physics.add.overlap(shurikens, obstacles, (b,o)=>{ b.destroy(); o.destroy(); score += 10; });
+    // Collisions
+    s.physics.add.overlap(shurikens, obstacles, (b,o)=>{ b.destroy(); o.destroy(); score += (1 + difficulty * 0.1); });
     s.physics.add.collider(player, obstacles, () => endGame());
 
+    // Spawners
     let nextSpawn = 0;
     function createGroundObstacle() {
-      const o = obstacles.create(W + 20, GROUND_Y, 'cactusRect').setOrigin(0.5,1);
-      o.body.setImmovable(true);
-      o.setVelocityX(-SPEED);
-      return o;
+      return obstacles.create(W + 20, GROUND_Y, 'cactusRect')
+        .setOrigin(0.5,1)
+        .setVelocityX(-worldSpeed);
     }
     function createFlyingObstacle() {
       const f = obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0').setOrigin(0.5,1);
       f.play('ptero-fly');
-      f.body.setImmovable(true);
-      f.setVelocityX(-Phaser.Math.Between(SPEED-30, SPEED+50));
-      f.body.setAllowGravity(false);
+      f.setVelocityX(-Phaser.Math.Between(worldSpeed-30, worldSpeed+50));
       return f;
     }
     function spawnObstacle() {
       (Math.random() < 0.65) ? createGroundObstacle() : createFlyingObstacle();
     }
 
-    const THROW_OFFSET = { x: 14, y: -38 };
+    // Throw
+    const THROW_OFFSET = { x: 14, y: -38 }; // adjust when you swap to real art
     function spawnShuriken(scene) {
-      const b = shurikens.get(player.x + THROW_OFFSET.x, player.y + THROW_OFFSET.y, 'px');
+      const sx = player.x + THROW_OFFSET.x;
+      const sy = player.y + THROW_OFFSET.y;
+      const b = shurikens.get(sx, sy, 'px');
       if (!b) return;
+      const SHURIKEN_SPEED = SHURIKEN_SPEED_BASE + difficulty * 20;
       b.setActive(true).setVisible(true).setDisplaySize(6,6);
       scene.physics.world.enable(b);
       b.body.setAllowGravity(false);
       b.setVelocityX(SHURIKEN_SPEED);
     }
-    function doThrow(scene) {
+    function doThrow(scene, player, arms, shurikens) {
       if (gameOver || throwing) return;
       throwing = true;
       arms.anims.play('arms-throw', true);
@@ -177,28 +173,40 @@
       });
     }
 
-    // Start run anims
+    // Start anims
     player.play('base-run');
     arms.play('arms-run');
 
+    // ------------- UPDATE LOOP -------------
     s.update = function(time, delta) {
       if (gameOver) return;
 
-      ground.tilePositionX += (SPEED * delta / 1000);
+      // Difficulty progression
+      const elapsed = this.time.now - startTime;
+      difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
+      worldSpeed  = SPEED + difficulty * SPEED_STEP;
 
+      // Scroll ground according to world speed
+      ground.tilePositionX += (worldSpeed * delta / 1000);
+
+      // Jump
       if ((cursors.up.isDown || cursors.space.isDown) && player.body.blocked.down) {
         player.setVelocityY(JUMP_VELOCITY);
       }
 
+      // Spawn with scaled interval
       if (time > nextSpawn) {
         spawnObstacle();
-        nextSpawn = time + OBSTACLE_BASE_INTERVAL + Phaser.Math.Between(-300, 300);
+        const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, difficulty);
+        nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
       }
 
+      // Cleanup & scoring
       shurikens.children.each(b => { if (b.active && b.x > W + 40) b.destroy(); });
-      obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); score += 1; } });
+      obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); score += (1 + difficulty * 0.1); } });
 
-      scoreText.setText('SCORE ' + score);
+      // UI
+      scoreText.setText('SCORE ' + Math.floor(score));
     };
   }
 
