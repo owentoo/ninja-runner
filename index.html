@@ -33,10 +33,10 @@
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
 
+  // Ground spawns: chance to use the running enemy (mirror ninja)
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
-  const SUPER_PARALLAX = 0.90; // super banner scroll speed (between hills and groundBack)
 
   // Jump forgiveness + variable height
   const COYOTE_TIME_MS = 120;
@@ -50,9 +50,10 @@
   const SHURIKEN_SPIN_VARIANCE = 1.0;
 
   // Power-up (collectible)
-  const POWERUP_SPEED_MULT = 1.5;      // +50% speed
-  const POWERUP_DURATION_MS = 6000;    // 6s
-  const COLLECTIBLE_BASE_INTERVAL = 10000; // 10s average, with randomness
+  const POWERUP_SPEED_MULT = 3.0;          // 3x speed
+  const POWERUP_DURATION_MS = 6000;        // 6s
+  const POWERUP_WARN_MS = 1000;            // last 1s blink warning
+  const COLLECTIBLE_BASE_INTERVAL = 10000; // average 10s
   const COLLECTIBLE_INTERVAL_JITTER = 4000;
 
   new Phaser.Game({
@@ -78,14 +79,13 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrate(scene) { // kept for reference
+  function makeCrate(scene) { // keeps old crate texture around (not used as spawn)
     const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
     g.lineStyle(3, 0x3f2d14, 1).strokeRect(b,b,w-2*b,h-2*b);
     g.generateTexture(key, w, h); g.destroy();
   }
-  // Simple collectible placeholder (glowy circle)
   function makeCollectibleTex(scene) {
     const key='collectible';
     const size=20;
@@ -115,7 +115,7 @@
     // Shuriken art
     this.load.image('shuriken', 'shuriken.png');
 
-    // Super banner (appears during power-up)
+    // Super banner (full height from top to ground)
     this.load.image('superBanner', 'super.png');
 
     // Arms / throw placeholders (overlay only)
@@ -127,11 +127,10 @@
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
 
-    // Collectible placeholder (used only if no `collectible.png`)
+    // Collectible placeholder
     makeCollectibleTex(this);
-    // If you have a real file, it will override the placeholder key:
-    this.load.on('filecomplete-image-collectible', ()=>{}, this);
-    this.load.image('collectible', 'collectible.png'); // optional; ignore 404 at runtime if not present
+    // If you have a file named collectible.png it will replace the placeholder
+    this.load.image('collectible', 'collectible.png');
   }
 
   // ---------------- create ----------------
@@ -151,8 +150,8 @@
     // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
-    s.speedMult = 1.0;        // current target speed multiplier (1.0 or 1.5)
-    s._prevSpeedMult = 1.0;   // last applied to moving bodies
+    s.speedMult = 1.0;        // current target speed multiplier (1.0 or 3.0)
+    s._prevSpeedMult = 1.0;   // last applied to movers
     s.invincible = false;
 
     // Parallax layers
@@ -160,9 +159,9 @@
     s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
 
-    // Super banner layer (above bg, below ground)
-    // Height chosen to be visible; you can replace with your art’s natural aspect
-    s.superBanner = s.add.tileSprite(0, GROUND_Y-52, W*2, 48, 'superBanner')
+    // Super banner layer (fill from top to ground, above bg but below ground)
+    const superHeight = GROUND_Y; // full vertical up to ground
+    s.superBanner = s.add.tileSprite(0, 0, W*2, superHeight, 'superBanner')
       .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
 
     s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
@@ -269,16 +268,26 @@
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
 
+    // Stop any power-up visuals
+    stopBlink(s);
+    s.superBanner.setVisible(false);
+    s.player.clearTint();
+    s.invincible = false;
+    s.speedMult = 1.0;
+
     s.gameOverTxt.setText('GAME OVER');
     s.restartTxt.setText('Press R to Restart');
   }
 
-  // ----- Power-up: speed + invincible + banner -----
+  // ----- Power-up: speed + invincible + full-height banner + warning blink -----
   function activatePowerUp(s) {
-    // Already active? Refresh timer & keep current state
+    // If already active, refresh timers & reset warning setup
     if (s.invincible) {
       if (s._powerupTimer) s._powerupTimer.remove(false);
+      if (s._warnTimer) s._warnTimer.remove(false);
+      stopBlink(s); // in case warning had started
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
+      s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       return;
     }
 
@@ -287,11 +296,12 @@
     s.player.setTint(0x8ef1ff); // subtle cyan tint
     s.superBanner.setVisible(true);
 
-    // Adjust existing movers’ velocities to match new multiplier
+    // Re-scale existing movers’ velocities to match new multiplier
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
 
-    // timer to end it
+    // Timers
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
+    s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
   }
 
   function deactivatePowerUp(s) {
@@ -300,15 +310,49 @@
     s.player.clearTint();
     s.superBanner.setVisible(false);
 
+    // Cancel timers & blink
+    if (s._powerupTimer) s._powerupTimer.remove(false);
+    if (s._warnTimer) s._warnTimer.remove(false);
+    stopBlink(s);
+
     // Adjust movers back down
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
+  }
+
+  function startBlink(s) {
+    // Safety: avoid duplicates
+    stopBlink(s);
+
+    // Ninja blink (alpha pulse)
+    s._blinkTweenPlayer = s.tweens.add({
+      targets: s.player,
+      alpha: 0.45,
+      duration: 120,
+      yoyo: true,
+      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 // enough pulses for ~1s
+    });
+
+    // Banner blink (alpha pulse)
+    s._blinkTweenBanner = s.tweens.add({
+      targets: s.superBanner,
+      alpha: 0.4,
+      duration: 120,
+      yoyo: true,
+      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
+    });
+  }
+
+  function stopBlink(s) {
+    if (s._blinkTweenPlayer) { s._blinkTweenPlayer.stop(); s._blinkTweenPlayer = null; }
+    if (s._blinkTweenBanner) { s._blinkTweenBanner.stop(); s._blinkTweenBanner = null; }
+    if (s.player) s.player.setAlpha(1);
+    if (s.superBanner) s.superBanner.setAlpha(0.9);
   }
 
   function rescaleMoversForSpeedChange(s, prevMult, newMult) {
     if (prevMult === newMult) return;
     const scale = newMult / prevMult;
 
-    // Re-scale existing obstacles & collectibles velocities
     s.obstacles.children.each(o => { if (o.active && o.body && o.body.velocity) o.body.velocity.x *= scale; });
     s.collectibles.children.each(c => { if (c.active && c.body && c.body.velocity) c.body.velocity.x *= scale; });
     s.shurikens.children.each(b => { if (b.active && b.body && b.body.velocity) b.body.velocity.x *= scale; });
@@ -415,12 +459,12 @@
 
     const dt = delta / 1000;
 
-    // Parallax + super banner scroll (speed respects power-up)
+    // Parallax + banner scroll (speed respects power-up)
     const scroll = s.worldSpeed * s.speedMult;
     s.bgClouds.tilePositionX    += (scroll * PARALLAX.clouds)     * dt;
     s.bgMountains.tilePositionX += (scroll * PARALLAX.mountains)  * dt;
     s.bgHills.tilePositionX     += (scroll * PARALLAX.hills)      * dt;
-    if (s.superBanner.visible)   s.superBanner.tilePositionX += (scroll * SUPER_PARALLAX) * dt;
+    if (s.superBanner.visible)   s.superBanner.tilePositionX      += (scroll * 0.90) * dt;
     s.groundBack.tilePositionX  += (scroll * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (scroll * PARALLAX.groundFront)* dt;
 
@@ -449,7 +493,7 @@
       if (b.x > W + 40) b.destroy();
     });
 
-    // Spawn enemies/collectibles
+    // Spawns
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
