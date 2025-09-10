@@ -228,7 +228,9 @@
     s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
     s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    // Collisions (single-hit guard for shuriken vs obstacles)
+    // --- Collisions / Contacts ---
+
+    // Shuriken vs obstacles (single-hit guard)
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
       if (!b.active || !o.active) return;
       if (o.getData('hit')) { b.destroy(); return; }
@@ -243,15 +245,15 @@
       }
     });
 
-    // Player vs obstacles:
-    // - normal: game over
-    // - SUPER: zap anything touched
-    s.physics.add.collider(s.player, s.obstacles, (player, o) => {
-      if (s.invincible) {
-        zapObstacle(s, o);
-      } else {
-        endGame(s);
-      }
+    // Player <-> obstacles:
+    // 1) Collider for normal play (game over)
+    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => {
+      if (!s.invincible) endGame(s);
+    });
+
+    // 2) Overlap always on; only zaps during SUPER (no pushback)
+    s.physics.add.overlap(s.player, s.obstacles, (player, o) => {
+      if (s.invincible) zapObstacle(s, o);
     });
 
     // Player vs collectible (activate power-up)
@@ -312,14 +314,16 @@
 
   // ----- Power-up: speed + invincible + full-height banner + warning blink + trail -----
   function activatePowerUp(s) {
-    // If already active, refresh timers & reset warning setup
+    // Already active? Refresh timers, keep collider disabled, keep trail
     if (s.invincible) {
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
-      stopBlink(s); // in case warning had started
+      stopBlink(s); // reset warning pulses
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
+      // ensure collider stays off
+      if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
 
@@ -328,6 +332,9 @@
     s.player.setTint(0x8ef1ff); // subtle cyan tint
     s.superBanner.setVisible(true);
     if (s.trailParticles) s.trailParticles.start();
+
+    // Disable collider so obstacles don't push ninja back
+    if (s._obstacleCollider) s._obstacleCollider.active = false;
 
     // Re-scale existing movers’ velocities to match new multiplier
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
@@ -343,6 +350,9 @@
     s.player.clearTint();
     s.superBanner.setVisible(false);
     if (s.trailParticles) s.trailParticles.stop();
+
+    // Re-enable collider for normal play
+    if (s._obstacleCollider) s._obstacleCollider.active = true;
 
     // Cancel timers & blink
     if (s._powerupTimer) s._powerupTimer.remove(false);
