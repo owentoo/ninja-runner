@@ -626,8 +626,6 @@
   window.addEventListener('pageshow', updateUX);
 
   // ===== Boot UX
-  function isMobile(){ return /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent); }
-  function isPortrait(){ return window.matchMedia('(orientation: portrait)').matches; }
   updateUX();
 })();
 </script>
