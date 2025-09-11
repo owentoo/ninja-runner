@@ -2,20 +2,18 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Stable Restart</title>
+  <title>Ninja Runner — Stabilized Restart</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <style>
     html, body { height: 100%; margin: 0; background: #d9d9d9; }
-
     #game-outer {
       position: relative;
       width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
       background: transparent; overflow: hidden;
     }
-
     .immersive body { overflow: hidden; }
     .immersive #game-outer { height: 100dvh; }
 
@@ -28,6 +26,7 @@
       background: #d9d9d9;
       box-shadow: inset 0 0 0 2px #b5b5b5;
       border-radius: 6px;
+      transition: none;
     }
     #stage.frozen { aspect-ratio: auto !important; }
 
@@ -39,7 +38,6 @@
     canvas { display: block; }
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
 
-    /* Overlays */
     .overlay {
       position: absolute; inset: 0;
       display: none; align-items: center; justify-content: center;
@@ -60,11 +58,6 @@
       background: #00b894; color: #0b1b16; cursor: pointer;
     }
 
-    /* z-index fixes */
-    #gameover { z-index: 20; }          /* sits above others */
-    #rotate-overlay { z-index: 9; }     /* sits below gameover */
-
-    /* Fullscreen button */
     #fs-btn {
       position: absolute; right: 10px; top: 10px; z-index: 11;
       padding: 8px 10px; border: 0; border-radius: 12px;
@@ -73,6 +66,16 @@
       display: none; touch-action: manipulation;
     }
     #fs-btn.show { display: inline-block; }
+
+    /* Tiny fail overlay for white screen situations */
+    #boot-fail {
+      position:absolute; inset:auto 10px 10px auto; z-index:12;
+      display:none; padding:10px 12px; border-radius:10px;
+      background:#000; color:#fff; font: 12px/1.3 system-ui, -apple-system, Segoe UI, Roboto;
+      opacity:.95;
+    }
+    #boot-fail.show { display:block; }
+    #boot-fail button { margin-left:8px; border:0; border-radius:8px; padding:6px 10px; background:#00b894; color:#0b1b16; cursor:pointer; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
@@ -120,6 +123,7 @@
       </div>
 
       <button id="fs-btn" aria-label="Enter fullscreen">⤢ Fullscreen</button>
+      <div id="boot-fail">Game didn’t boot. <button id="force-restart">Force Restart</button></div>
     </div>
   </div>
 
@@ -165,6 +169,8 @@
   const startCTA = document.getElementById('start-cta');
   const restartCTA = document.getElementById('restart-cta');
   const fsBtn = document.getElementById('fs-btn');
+  const bootFail = document.getElementById('boot-fail');
+  const forceRestart = document.getElementById('force-restart');
 
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
@@ -182,18 +188,21 @@
     stage.classList.remove('frozen');
   }
 
-  // Build game with robust visibility handling
+  // Build game with strong safety nets
   async function buildGame(scaleMode, { freezeDuringBuild = false } = {}) {
-    currentScaleMode = scaleMode;
-    if (freezeDuringBuild) freezeStageSize();
-
-    if (game) { try { game.destroy(true); } catch {} game = null; }
-
     const canvas = document.getElementById('game');
-    canvas.style.visibility = 'hidden';
-
-    let built = false;
+    let froze = false;
     try {
+      currentScaleMode = scaleMode;
+      if (freezeDuringBuild) { freezeStageSize(); froze = true; }
+
+      // tear down old safely
+      if (game) { try { game.destroy(true); } catch {} game = null; }
+
+      // hide canvas during rebuild; we'll *always* re-show in finally
+      canvas.style.visibility = 'hidden';
+      bootFail.classList.remove('show');
+
       game = new Phaser.Game({
         type: Phaser.CANVAS,
         backgroundColor: '#87ceeb',
@@ -209,22 +218,34 @@
         scene: { preload, create, update }
       });
 
-      // Two RAFs + refresh + one more RAF + refresh (settle layout)
+      // Extra-stable boot
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       try { game.scale.refresh(); } catch {}
       await new Promise(r => requestAnimationFrame(r));
       try { game.scale.refresh(); } catch {}
-      built = true;
+
+      // Watchdog: if scene not alive in 2s, show recovery
+      const start = performance.now();
+      await new Promise((resolve) => {
+        const check = () => {
+          const s = game?.scene?.scenes?.[0];
+          if (s && s.sys?.isActive()) return resolve();
+          if (performance.now() - start > 2000) return resolve('timeout');
+          requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      });
+    } catch (e) {
+      console.error('buildGame error', e);
+      bootFail.classList.add('show');
     } finally {
-      // Always reveal canvas even if an error occurred
-      canvas.style.visibility = 'visible';
-      if (freezeDuringBuild) unfreezeStageSize();
-      if (!built) {
-        // Show splash1 so user sees something if boot failed
-        splash1.classList.add('show');
-        splash2.classList.remove('show');
-        gameover.classList.remove('show');
-      }
+      // Always unhide and unfreeze so we never leave a white box
+      document.getElementById('game').style.visibility = 'visible';
+      if (froze) unfreezeStageSize();
+
+      // If nothing is running, surface the recovery pill
+      const s = game?.scene?.scenes?.[0];
+      if (!s || !s.sys?.isActive()) bootFail.classList.add('show');
     }
   }
 
@@ -252,8 +273,7 @@
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this,'ptero'+i,48,24,0x000000);
     makeCollectibleTex(this);
-    /* Removed duplicate load for 'collectible' to avoid key conflicts on rebuild
-       this.load.image('collectible','collectible.png'); */
+    this.load.image('collectible','collectible.png');
   }
 
   function ensureBGAndGroundTextures(s){
@@ -267,10 +287,15 @@
   function create(){
     const s=this; ensureBGAndGroundTextures(s);
 
+    // Reset any lingering timers/tweens from prior scene
+    stopBlink(s);
+
+    // boot paused until splash or immediate resume on restart
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
 
+    // Parallax
     s.bgClouds    = s.add.tileSprite(0, Math.round(H*0.10), W*2, Math.round(H*0.135),'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, Math.round(H*0.152),W*2, Math.round(H*0.152),'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0, Math.round(H*0.22), W*2, Math.round(H*0.118),'bgHills').setOrigin(0,0).setDepth(2);
@@ -288,6 +313,7 @@
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
+    // Anims
     s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
@@ -312,7 +338,6 @@
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
 
-    // Left-half = Jump; Right-half = Throw
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       const isLeft = pointer.worldX < (W * 0.5);
@@ -323,7 +348,6 @@
     s.input.keyboard.on('keydown-SPACE', ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
     keyX.on('down', () => { if (s.gameStarted) doThrow(s); });
 
-    // Jump buffer/coyote
     s.lastOnGroundAt = s.time.now; s.jumpQueuedAt = -Infinity; s.jumpReleased = false;
     s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
     s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
@@ -348,7 +372,7 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Guard against click-through during rebuild
+    // Prevent click-through during rebuild
     s.input.enabled = false;
     s.time.delayedCall(150, () => { s.input.enabled = true; });
 
@@ -370,16 +394,19 @@
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
 
   function endGame(s){
-    if (s.gameOver) return; s.gameOver = true;
-    s.physics.world.pause(); s.player.anims.pause(); s.arms.anims?.pause();
+    if (s.gameOver) return;
+    s.gameOver = true;
+
+    // Stop movement immediately and clear timers to avoid late flashes
+    try {
+      s.tweens.killAll();
+      s.time.removeAllEvents();
+    } catch {}
+    s.physics.world.pause();
+    s.player.anims.pause(); s.arms.anims?.pause();
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
-
-    // Stop any power-up timers to prevent post-death flashes
-    if (s._powerupTimer) s._powerupTimer.remove(false);
-    if (s._warnTimer) s._warnTimer.remove(false);
-
     stopBlink(s); s.superBanner?.setVisible(false); s.player.clearTint();
     s.invincible=false; s.speedMult=1.0; if (s.trailParticles) s.trailParticles.stop();
 
@@ -421,7 +448,12 @@
     s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
     s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
   }
-  function stopBlink(s){ if (s._blinkTweenPlayer){ s._blinkTweenPlayer.stop(); s._blinkTweenPlayer=null; } if (s._blinkTweenBanner){ s._blinkTweenBanner.stop(); s._blinkTweenBanner=null; } if (s.player) s.player.setAlpha(1); if (s.superBanner) s.superBanner.setAlpha(0.9); }
+  function stopBlink(s){ 
+    if (s._blinkTweenPlayer){ s._blinkTweenPlayer.stop(); s._blinkTweenPlayer=null; }
+    if (s._blinkTweenBanner){ s._blinkTweenBanner.stop(); s._blinkTweenBanner=null; }
+    if (s.player) s.player.setAlpha(1);
+    if (s.superBanner) s.superBanner.setAlpha(0.9);
+  }
   function rescaleMoversForSpeedChange(s,prevMult,newMult){
     if (prevMult===newMult) return; const k=newMult/prevMult;
     s.obstacles.children.each(o=>{ if (o.active&&o.body&&o.body.velocity) o.body.velocity.x*=k; });
@@ -451,8 +483,8 @@
 
   function createFlyingObstacle(s){
     const laneTop = GROUND_Y - sy(0.18 * BASE.H);
-    const laneBot = GROUND_Y - sy(0.14 * BASE.H);
-    const f = s.obstacles.create(W + sx(20), Phaser.Math.Between(laneTop,laneBot), 'ptero0')
+    a = GROUND_Y - sy(0.14 * BASE.H);
+    const f = s.obstacles.create(W + sx(20), Phaser.Math.Between(laneTop,a), 'ptero0')
       .setOrigin(0.5,1).setDepth(4.2);
     f.setDisplaySize(su(48), su(24));
     f.body.setSize(su(48), su(24)).setOffset(0,0);
@@ -559,4 +591,106 @@
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= Flow: splash
+  // ======= Flow: splash, start, restart =======
+  function toControls() { splash1.classList.remove('show'); splash2.classList.add('show'); }
+  splash1.addEventListener('click', toControls);
+  window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
+
+  function actuallyStartGame() {
+    splash2.classList.remove('show');
+    try {
+      const s = game.scene.scenes[0]; if (!s) return;
+      s.gameStarted = true; s.physics.world.resume(); s.player.anims.resume();
+      s.startTime = s.time.now; s.nextSpawn = 0; s.nextCollectible = s.time.now + collectibleInterval();
+    } catch {}
+  }
+  startCTA.addEventListener('click', actuallyStartGame);
+  window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) actuallyStartGame(); });
+
+  async function restartGame() {
+    gameover.classList.remove('show');
+    splash1.classList.remove('show');
+    splash2.classList.remove('show');
+    resumeImmediately = true;
+    justRestartedUntil = performance.now() + 700;
+    await buildGame(currentScaleMode, { freezeDuringBuild: true });
+  }
+  restartCTA.addEventListener('click', restartGame);
+  window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartGame(); });
+  gameover.addEventListener('click', restartGame);
+  forceRestart.addEventListener('click', restartGame);
+
+  // ======= Fullscreen =======
+  async function lockLandscape() { try { await screen.orientation?.lock?.('landscape'); } catch {} }
+  async function enterFullscreen() {
+    try {
+      if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
+      else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
+      else if (outer.msRequestFullscreen) outer.msRequestFullscreen();
+      else if (outer.mozRequestFullScreen) outer.mozRequestFullScreen();
+      await lockLandscape();
+      document.documentElement.classList.remove('immersive');
+      outer.classList.add('fs');
+      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
+    } catch {
+      document.documentElement.classList.add('immersive');
+      outer.classList.add('fs');
+      window.scrollTo(0,1);
+      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
+    }
+  }
+  async function exitFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (document.webkitFullscreenElement) document.webkitExitFullscreen?.();
+    } catch {}
+    document.documentElement.classList.remove('immersive');
+    outer.classList.remove('fs');
+    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: true });
+  }
+  fsBtn.addEventListener('click', async () => {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) await enterFullscreen();
+    else await exitFullscreen();
+  });
+  document.addEventListener('fullscreenchange', async () => {
+    const fs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
+    outer.classList.toggle('fs', fs);
+    if (game) { await new Promise(r => requestAnimationFrame(r)); game.scale.refresh(); }
+  });
+
+  // Rotate/UX
+  function updateUX() {
+    const onMobile = isMobile();
+    const showRotate = onMobile && isPortrait();
+    rotate.classList.toggle('show', showRotate);
+    fsBtn.classList.toggle('show', onMobile);
+
+    try {
+      if (!game) return;
+      const s = game.scene.scenes[0]; if (!s) return;
+
+      const inGrace = performance.now() < justRestartedUntil;
+      if (!inGrace && showRotate && s.gameStarted && !s.gameOver) {
+        s.physics.world.pause();
+      } else if (!showRotate && s.gameStarted && !s.gameOver) {
+        s.physics.world.resume();
+      }
+    } catch {}
+  }
+  window.addEventListener('resize', () => { updateUX(); if (game) game.scale.refresh(); });
+  window.addEventListener('orientationchange', () => { updateUX(); if (game) game.scale.refresh(); });
+  window.addEventListener('pageshow', updateUX);
+
+  // Boot
+  (async () => {
+    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: false });
+    updateUX();
+  })();
+
+})();
+</script>
+<!-- /script -->
+</body>
+<!-- /body -->
+</html>
+<!-- /html -->
