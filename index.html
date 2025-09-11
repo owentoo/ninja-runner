@@ -2,33 +2,41 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Fast, Fair, Reaction-Time Ramp</title>
+  <title>Ninja Runner — Mobile Multitouch + Beefy Dust + Strong Super Shake</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <style>
     html, body { height: 100%; margin: 0; background: #d9d9d9; }
+
     #game-outer {
       position: relative; width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
       overflow: hidden; background: transparent;
     }
+
     #stage {
       position: relative; width: min(100%, 1100px);
       aspect-ratio: 1280 / 592; height: auto;
       display: grid; place-items: center;
       background: #d9d9d9; box-shadow: inset 0 0 0 2px #b5b5b5; border-radius: 6px;
     }
+
     #game-outer.fs #stage { width: 100svw; height: 100svh; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
-    canvas { display: block; }
+
+    /* IMPORTANT for multi-touch gestures not to scroll/zoom the page */
+    canvas { display: block; touch-action: none; -ms-touch-action: none; }
+
     .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 10; text-align: center; background: rgba(0,0,0,.60); backdrop-filter: blur(4px); pointer-events: auto; }
     .overlay.show { display: flex; }
     .sheet { max-width: 560px; padding: 18px 16px; border-radius: 14px; background: rgba(0,0,0,.78); color: #fff; border: 1px solid rgba(255,255,255,.18); font: 600 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto; }
     .sheet h2 { margin: 0 0 8px; font-size: 20px; }
     .sheet p { margin: 8px 0; font-weight: 500; }
     .cta { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 12px; font: 600 14px/1 system-ui, -apple-system, Segoe UI, Roboto; background: #00b894; color: #0b1b16; cursor: pointer; }
+
     #fs-btn { position: absolute; right: 10px; top: 10px; z-index: 11; padding: 8px 10px; border: 0; border-radius: 12px; font: 12px/1 system-ui, -apple-system, Segoe UI, Roboto; background: #000; color: #fff; opacity: .95; cursor: pointer; display: none; touch-action: manipulation; }
     #fs-btn.show { display: inline-block; }
+
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
     #rotate-overlay .sheet { background: rgba(0,0,0,.85); }
   </style>
@@ -90,48 +98,35 @@
   const GROUND_RATIO = 0.833;
   const GROUND_Y = Math.round(H * GROUND_RATIO);
 
-  // ======= ADAPTIVE (per session, not persisted) =======
-  let sessionSkill = 0; // -2..+3
-
-  // ======= GAME CONSTANTS (fast baseline) =======
+  // ======= GAME CONSTANTS (fast + fair from previous pass) =======
   const SPEED = 320;
-  const GRAVITY = 1525;           // a touch higher for snappier arc
+  const GRAVITY = 1525;
   const JUMP_VELOCITY = -545;
 
-  // Shift toward reaction-time (less variable height advantage)
-  const COYOTE_TIME_MS = 140;     // a tad more forgiving
+  const COYOTE_TIME_MS = 140;
   const JUMP_BUFFER_MS = 140;
-  const JUMP_CUTOFF_FACTOR = 0.70; // less drop when you release (short vs long closer)
+  const JUMP_CUTOFF_FACTOR = 0.70;
 
-  // Ramp
   const OBSTACLE_BASE_INTERVAL = 920;
   const MAX_DIFF = 12;
   const DIFF_EVERY_MS = 7800;
   const SPEED_STEP = 36;
   const INTERVAL_FACTOR = 0.86;
 
-  // Projectiles / mix
   const SHURIKEN_SPEED_BASE = 700;
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
-  // Parallax
   const PARALLAX = { clouds:0.22, mountains:0.38, hills:0.60, groundBack:1.08, groundFront:1.26 };
 
-  // Powerups
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
   const COLLECTIBLE_BASE_INTERVAL = 12800, COLLECTIBLE_INTERVAL_JITTER = 4200;
 
-  // ======= FAIRNESS RULES =======
+  // Fairness rules (safe corridor on super end, min gaps, etc.)
   const FAIR = {
-    // Minimum clear distance ahead of the last spawned obstacle before another can appear.
-    // Scales with difficulty to remain readable at speed.
     minGapBasePx: sx(240),
     minGapPerDiffPx: sx(14),
-    // Extra pad after a burst sequence
     postBurstPadPx: sx(160),
-    // Flyers must sit high enough over ground path to avoid impossible combos.
     flyerMinClearancePx: sy(64),
-    // Safe corridor when super ends
     superSafeAheadPx: sx(360),
     superSpawnFreezeMs: 700
   };
@@ -152,6 +147,9 @@
 
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
+
+  // Session bias from earlier version (kept lightweight)
+  let sessionSkill = 0;
 
   // ======= Phaser =======
   let game, scene;
@@ -211,10 +209,8 @@
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
-    s.spawnFrozenUntil = 0; // for super-end freeze
+    s.spawnFrozenUntil = 0;
     s.lastSpawnTime = 0;
-
-    // Carry session bias
     s.skillBias = Phaser.Math.Clamp(sessionSkill, -2, 3);
 
     // Layers
@@ -243,14 +239,22 @@
 
     s.player.play('base-run'); s.player.anims.pause();
 
-    // Dust trail (subtle)
+    // >>> MORE PRONOUNCED DUST TRAIL (behind the ninja)
     s.dust = s.add.particles(0,0,'px', {
-      lifespan: 260, speed: {min:10,max:40}, angle: {min:200,max:260},
-      scale: { start: 0.8, end: 0 }, alpha: { start: 0.25, end: 0 },
-      quantity: 1, frequency: 40, tint: 0x000000, follow: s.player, followOffset: { x: -18, y: -8 },
+      lifespan: { min: 260, max: 360 },
+      speed:    { min: 60,  max: 140 },    // higher speed
+      angle:    { min: 200, max: 300 },    // wider fan
+      quantity: 2,                          // more particles each emission
+      frequency: 20,                        // more frequent
+      scale:    { start: 1.25, end: 0 },    // bigger puffs
+      alpha:    { start: 0.45, end: 0 },    // more visible
+      tint: 0x000000,
+      follow: s.player,
+      followOffset: { x: -20, y: -10 },
       blendMode: 'MULTIPLY'
     }); s.dust.stop();
 
+    // Super trail (unchanged)
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
@@ -264,28 +268,42 @@
     s.collectibles= s.physics.add.group({ allowGravity:false, immovable:true });
     s.shurikens   = s.physics.add.group({ maxSize: 12 });
 
-    // Inputs
+    // ======= INPUTS =======
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
 
-    // Touch jumps (timed)
+    // IMPORTANT: allow multi-touch (left thumb jump + right thumb throw)
+    s.input.addPointer(3); // total 4 pointers
+
+    // Touch state
     s.touchJumpPointerId = null; s.jumpHeldByTouch = false; s.touchWasLeftHalf = false;
 
+    // Pointerdown: LEFT = jump (hold ok), RIGHT = throw (even if jump is held)
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       const isLeft = pointer.worldX < (W * 0.5);
       if (isLeft) {
-        s.touchJumpPointerId = pointer.id; s.touchWasLeftHalf = true; s.jumpHeldByTouch = true;
-        s.jumpQueuedAt = s.time.now; s.jumpReleased = false;
-      } else { doThrow(s); }
-    });
-    s.input.on('pointerup', (pointer) => {
-      if (!s.gameStarted || s.gameOver) return;
-      if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
-        s.jumpReleased = true; s.jumpHeldByTouch = false; s.touchWasLeftHalf = false; s.touchJumpPointerId = null;
+        s.touchJumpPointerId = pointer.id;
+        s.touchWasLeftHalf = true;
+        s.jumpHeldByTouch = true;
+        s.jumpQueuedAt = s.time.now;
+        s.jumpReleased = false;
+      } else {
+        doThrow(s); // no guard; allowed during jump hold
       }
     });
 
+    s.input.on('pointerup', (pointer) => {
+      if (!s.gameStarted || s.gameOver) return;
+      if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
+        s.jumpReleased = true;
+        s.jumpHeldByTouch = false;
+        s.touchWasLeftHalf = false;
+        s.touchJumpPointerId = null;
+      }
+    });
+
+    // Keyboard
     s.input.keyboard.on('keydown-UP',    ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{
       if (!s.gameStarted && !s.gameOver && splash2.classList.contains('show')) { startRun(); return; }
@@ -300,7 +318,7 @@
 
     s.scoreText = s.add.text(sx(14), sy(12), 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
 
-    // Collisions
+    // Collisions (unchanged)
     s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => { if (!s.invincible) endGame(s); });
     s.physics.add.overlap(s.player, s.obstacles, (player, o) => { if (s.invincible) zapObstacle(s, o); });
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
@@ -325,21 +343,18 @@
 
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
 
-  // ======= Helpers =======
+  // ======= Utility / pacing =======
   function animScaleFromSpeed(s){ const r = (s.worldSpeed * s.speedMult) / SPEED; return Phaser.Math.Clamp(r, 1.0, 2.6); }
   function applyAnimTimeScales(s){
     const ts = animScaleFromSpeed(s);
     if (s.player?.anims) s.player.anims.timeScale = ts;
     s.obstacles.children.each(o=>{ if (o.anims) o.anims.timeScale = ts * 0.95; });
   }
-
   function msFromPixels(px, scroll){ return (px / Math.max(80, scroll)) * 1000; }
-
   function fairMinGapMs(s, scroll){
     const px = FAIR.minGapBasePx + s.difficulty * FAIR.minGapPerDiffPx;
     return msFromPixels(px, scroll);
   }
-
   function clearSafeCorridorAhead(s){
     const ahead = FAIR.superSafeAheadPx;
     s.obstacles.children.each(o=>{
@@ -377,7 +392,9 @@
   function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
 
   function activatePowerUp(s){
-    s.cameras.main.shake(180, 0.004);
+    // >>> STRONGER ENTER-SUPER SHAKE
+    s.cameras.main.shake(240, 0.008); // duration, intensity (was ~0.004)
+
     if (s.invincible){
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
@@ -396,6 +413,7 @@
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
     s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
   }
+
   function deactivatePowerUp(s){
     s.invincible=false; s.speedMult=1.0; s.player.clearTint();
     s.superBanner.setVisible(false); if (s.trailParticles) s.trailParticles.stop();
@@ -406,21 +424,24 @@
     rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
     applyAnimTimeScales(s);
 
-    // *** FAIRNESS: clear a corridor and freeze spawns briefly
+    // Safe corridor + brief spawn freeze after super ends
     clearSafeCorridorAhead(s);
     s.spawnFrozenUntil = s.time.now + FAIR.superSpawnFreezeMs;
   }
+
   function startBlink(s){
     stopBlink(s);
     s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
     s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
   }
+
   function stopBlink(s){ 
     if (s._blinkTweenPlayer){ s._blinkTweenPlayer.stop(); s._blinkTweenPlayer=null; }
     if (s._blinkTweenBanner){ s._blinkTweenBanner.stop(); s._blinkTweenBanner=null; }
     if (s.player) s.player.setAlpha(1);
     if (s.superBanner) s.superBanner.setAlpha(0.9);
   }
+
   function rescaleMoversForSpeedChange(s,prevMult,newMult){
     if (prevMult===newMult) return; const k=newMult/prevMult;
     s.obstacles.children.each(o=>{ if (o.active&&o.body&&o.body.velocity) o.body.velocity.x*=k; });
@@ -429,7 +450,7 @@
     s._prevSpeedMult = newMult;
   }
 
-  // ======= Spawns (with fairness) =======
+  // ======= Spawns (fair) =======
   function createGroundObstacle(s){
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
     if (makeEnemy){
@@ -452,11 +473,9 @@
   }
 
   function createFlyingObstacle(s){
-    // Safer high lanes: ensure enough headroom vs ground route
     const laneTop = GROUND_Y - sy(0.26 * BASE.H);
     const laneBot = GROUND_Y - sy(0.16 * BASE.H);
     let y = Phaser.Math.Between(laneTop,laneBot);
-    // Nudge higher if too low
     if (GROUND_Y - y < FAIR.flyerMinClearancePx) y = GROUND_Y - FAIR.flyerMinClearancePx;
 
     const f = s.obstacles.create(W + sx(20), y, 'ptero0').setOrigin(0.5,1).setDepth(4.2);
@@ -472,7 +491,6 @@
   }
 
   function spawnObstacleFair(s){
-    // Weighted flyer ratio increases with diff, capped
     const flyWeight = Math.min(0.28 + s.difficulty * 0.055, 0.78);
     const created = (Math.random() < flyWeight) ? createFlyingObstacle(s) : createGroundObstacle(s);
     s.lastSpawnTime = s.time.now;
@@ -509,6 +527,7 @@
 
   function doThrow(s){
     if (!s.gameStarted || s.gameOver || s.throwing) return;
+    // NOTE: No blocking based on jump state; throwing is allowed during jump hold
     s.throwing = true;
     s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
     s.time.delayedCall(80, ()=> spawnShuriken(s));
@@ -542,7 +561,7 @@
 
     applyAnimTimeScales(s);
 
-    // Variable jump (reduced dependency)
+    // Jumps
     const now = s.time.now;
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
@@ -558,33 +577,27 @@
       s.jumpReleased = false;
     }
 
-    // Shuriken housekeeping
+    // Shurikens
     s.shurikens.children.each(b => {
       if (!b.active) return;
       b.rotation += (b.rotationSpeed||0) * dt;
       if (b.x > W + sx(40)) b.destroy();
     });
 
-    // Spawns with fairness: respect safe-freeze and min gap
+    // Spawns (with fairness + freeze after super)
     if (time > s.nextSpawn && now >= s.spawnFrozenUntil) {
       spawnObstacleFair(s);
 
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
       const jitter = Phaser.Math.Between(-240, 240);
-
-      // Enforce min gap window (convert gap px to ms based on current scroll)
       const minGapMs = fairMinGapMs(s, scroll);
 
-      // Optional burst (only if enough room to keep fair)
       let extraPadMs = 0;
       const burstChance = Math.min(0.20 + s.difficulty * 0.06, 0.70);
       if (Math.random() < burstChance) {
         const delay1 = Phaser.Math.Between(140, 280);
-        const afterBurstTime = time + delay1;
-        // Only schedule if it won't violate min gap (using current speed)
         if (delay1 >= minGapMs * 0.6) {
           s.time.delayedCall(delay1, () => { if (!s.gameOver && s.gameStarted) spawnObstacleFair(s); });
-          // Possible third
           if (Math.random() < (0.30 + s.difficulty * 0.03)) {
             const delay2 = delay1 + Phaser.Math.Between(120, 220);
             if (delay2 - delay1 >= minGapMs * 0.5) {
@@ -605,7 +618,6 @@
       s.nextCollectible = now + collectibleInterval();
     }
 
-    // Cleanup + scoring
     s.obstacles.children.each(o => { if (o.active && o.x < -sx(40)) { o.destroy(); s.score += (1 + s.difficulty * 0.12); } });
     s.collectibles.children.each(c => { if (c.active && c.x < -sx(40)) c.destroy(); });
 
@@ -625,7 +637,7 @@
     s.jumpQueuedAt = -Infinity; s.jumpReleased = false; s.lastOnGroundAt = s.time.now;
     s.physics.world.resume();
     s.player.anims.play('base-run', true); s.player.anims.resume();
-    s.dust.start();
+    s.dust.start(); // start dust
     s.startTime = s.time.now; s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
     s.spawnFrozenUntil = 0;
@@ -655,7 +667,7 @@
     s.jumpQueuedAt = -Infinity; s.jumpReleased = false; s.lastOnGroundAt = s.time.now;
     s.physics.world.resume();
     s.player.anims.play('base-run', true); s.player.anims.resume();
-    s.dust.start();
+    s.dust.start(); // start dust
     s.spawnFrozenUntil = 0;
   }
   restartCTA.addEventListener('click', restartRun);
