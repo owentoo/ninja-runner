@@ -2,28 +2,27 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — PNG-first with Fallbacks</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ninja Runner — Responsive + Mobile HUD + Orientation Gate + First-Tap Fullscreen</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <style>
     html, body {
       height: 100%; margin: 0;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      background: #f2f2f2;
+      background:#f2f2f2;
+      display:flex; align-items:center; justify-content:center; flex-direction:column;
     }
-    #game { max-width: 900px; }
+    #game { max-width: 100vw; max-height: 100vh; }
     .hint { font: 12px/1.4 monospace; color: #333; margin-top: 6px; text-align: center; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
 <body>
 <canvas id="game"></canvas>
-<div class="hint">↑/SPACE = jump • X/click = throw • R = restart</div>
+<div class="hint">↑/SPACE = jump • X/click = throw • R = restart • (Mobile: left=jump, right=throw)</div>
 
 <script>
 (() => {
   // ---------------- constants ----------------
-  const W = 800, H = 300;
+  const W = 800, H = 300;               // DESIGN SIZE (physics & gameplay math)
   const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const GROUND_Y = 250;
 
@@ -33,7 +32,6 @@
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
 
-  // Ground spawns: chance to use the running enemy (mirror ninja)
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
@@ -56,12 +54,20 @@
   const COLLECTIBLE_BASE_INTERVAL = 10000; // average 15s
   const COLLECTIBLE_INTERVAL_JITTER = 4000;
 
+  // -------------- Phaser Game --------------
   new Phaser.Game({
     type: Phaser.CANVAS,
-    width: W, height: H,
-    backgroundColor: '#87ceeb',
     canvas: document.getElementById('game'),
+    backgroundColor: '#87ceeb',
     physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
+    // ✅ Responsive canvas that preserves 800×300 aspect, letterboxed & centered
+    scale: {
+      width: W,
+      height: H,
+      mode: Phaser.Scale.FIT,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+      expandParent: false
+    },
     scene: { preload, create, update }
   });
 
@@ -79,7 +85,7 @@
     for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
     g.generateTexture(key, w, h); g.destroy();
   }
-  function makeCrate(scene) { // keeps old crate texture around (not used as spawn)
+  function makeCrate(scene) {
     const key='crateRect', w=48, h=48, b=1;
     const g = scene.add.graphics();
     g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
@@ -98,39 +104,29 @@
 
   // ---------------- preload ----------------
   function preload() {
-    // tiny pixel for bullets/floor & particles
     solid(this, 'px', 2, 2, 0x000000);
 
-    // Background / ground
     this.load.image('bgClouds',       'bg_clouds.png');
     this.load.image('bgMountains',    'bg_mountains.png');
     this.load.image('bgHills',        'bg_hills.png');
     this.load.image('groundBackTile', 'ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
 
-    // Player & enemy sprite sheets
     this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
     this.load.spritesheet('enemyRun', 'ninja_run_enemy.png', { frameWidth: 48, frameHeight: 55 });
 
-    // Shuriken art
     this.load.image('shuriken', 'shuriken.png');
-
-    // Super banner (full height from top to ground)
     this.load.image('superBanner', 'super.png');
 
-    // Arms / throw placeholders (overlay only)
     for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
     for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
 
-    // Obstacles placeholders
     solid(this, 'cactusRect', 16, 26, 0x000000);
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
 
-    // Collectible placeholder
     makeCollectibleTex(this);
-    // If you have a file named collectible.png it will replace the placeholder
-    this.load.image('collectible', 'collectible.png');
+    this.load.image('collectible', 'collectible.png'); // optional override
   }
 
   // ---------------- create ----------------
@@ -150,22 +146,24 @@
     // Scene state
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
-    s.speedMult = 1.0;        // current target speed multiplier (1.0 or 3.0)
-    s._prevSpeedMult = 1.0;   // last applied to movers
-    s.invincible = false;
+    s.speedMult = 1.0; s._prevSpeedMult = 1.0; s.invincible = false;
+
+    // First-tap gate for mobile
+    s.isTouchDevice = s.sys.game.device.input.touch;
+    s.awaitingFirstTap = !!s.isTouchDevice; // desktop starts immediately
 
     // Parallax layers
-    s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
-    s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
-    s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
+    s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0).setScrollFactor(0);
+    s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1).setScrollFactor(0);
+    s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2).setScrollFactor(0);
 
-    // Super banner layer (fill from top to ground, above bg but below ground)
-    const superHeight = GROUND_Y; // full vertical up to ground
+    // Super banner layer (full height up to ground)
+    const superHeight = GROUND_Y;
     s.superBanner = s.add.tileSprite(0, 0, W*2, superHeight, 'superBanner')
-      .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
+      .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9).setScrollFactor(0);
 
-    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
-    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
+    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0).setScrollFactor(0);
+    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2).setScrollFactor(0);
 
     // Floor collider
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
@@ -180,17 +178,11 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // --- SUPER TRAIL (particles), initially off ---
+    // Trail particles (off initially)
     s.trailParticles = s.add.particles(0, 0, 'px', {
-      lifespan: 220,
-      speed: 0,
-      quantity: 1,
-      frequency: 22,
-      scale: { start: 1.1, end: 0 },
-      alpha: { start: 0.65, end: 0 },
-      tint: 0x8ef1ff,
-      follow: s.player,
-      blendMode: 'ADD'
+      lifespan: 220, speed: 0, quantity: 1, frequency: 22,
+      scale: { start: 1.1, end: 0 }, alpha: { start: 0.65, end: 0 },
+      tint: 0x8ef1ff, follow: s.player, blendMode: 'ADD'
     });
     s.trailParticles.stop();
 
@@ -205,32 +197,35 @@
     s.collectibles= s.physics.add.group({ allowGravity:false, immovable:true });
     s.shurikens   = s.physics.add.group({ maxSize: 12 });
 
-    // Input
+    // -------- Orientation Gate (portrait prompt + input block)
+    buildOrientationGate(s);
+
+    // ---------------- Input (desktop keys)
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    s.input.on('pointerdown', () => doThrow(s));
     keyX.on('down', () => doThrow(s));
+    s.input.on('pointerdown', () => { if (!s.awaitingFirstTap) doThrow(s); }); // desktop click throws; mobile overlay blocks until first tap
     keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
-    // Jump buffering / coyote bookkeeping
+    // Jump bookkeeping
     s.lastOnGroundAt = s.time.now;
     s.jumpQueuedAt   = -Infinity;
     s.jumpReleased   = false;
-
     s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
-    s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
-    s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-UP',      ()=>{ s.jumpReleased = true;       });
+    s.input.keyboard.on('keyup-SPACE',   ()=>{ s.jumpReleased = true;       });
 
-    // UI
-    s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
-    s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
-    s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
+    // ---------------- UI (anchored)
+    s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10).setScrollFactor(0);
+    s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10).setScrollFactor(0);
+    s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10).setScrollFactor(0);
+
+    // ---------------- Mobile-only HUD (created AFTER first tap)
+    s.mobileHUD = null;
 
     // --- Collisions / Contacts ---
-
-    // Shuriken vs obstacles (single-hit guard)
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
       if (!b.active || !o.active) return;
       if (o.getData('hit')) { b.destroy(); return; }
@@ -245,18 +240,14 @@
       }
     });
 
-    // Player <-> obstacles:
-    // 1) Collider for normal play (game over)
-    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => {
+    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, () => {
       if (!s.invincible) endGame(s);
     });
 
-    // 2) Overlap always on; only zaps during SUPER (no pushback)
     s.physics.add.overlap(s.player, s.obstacles, (player, o) => {
       if (s.invincible) zapObstacle(s, o);
     });
 
-    // Player vs collectible (activate power-up)
     s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
       if (!item.active) return;
       item.destroy();
@@ -267,8 +258,143 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start anims
-    s.player.play('base-run');
+    // ---- First-tap overlay for mobile (blocks input until tapped)
+    if (s.awaitingFirstTap) {
+      s.physics.world.pause(); // freeze physics until start
+      buildFirstTapOverlay(s);
+    } else {
+      // Desktop starts immediately
+      s.player.play('base-run');
+      // Touch HUD not needed on desktop
+    }
+  }
+
+  // -------- First-tap overlay (mobile): starts fullscreen + game on first tap
+  function buildFirstTapOverlay(s) {
+    const overlay = s.add.container(0,0).setDepth(900).setScrollFactor(0);
+    const bg = s.add.rectangle(0,0,W,H,0x000000,0.45).setOrigin(0,0).setInteractive(); // interactive to block input
+    const box = s.add.rectangle(W/2, H/2, Math.min(520, W*0.9), 120, 0xffffff, 0.95).setStrokeStyle(2,0x000000,0.6);
+    const msg = 'Tap to play\n(also enters fullscreen)';
+    const txt = s.add.text(W/2, H/2, msg, {
+      fontFamily:'monospace', fontSize: 16, color:'#000', align:'center'
+    }).setOrigin(0.5);
+    overlay.add([bg, box, txt]);
+
+    const layout = () => {
+      bg.setSize(W, H);
+      box.setPosition(W/2, H/2).setSize(Math.min(520, W*0.9), 120);
+      txt.setPosition(W/2, H/2);
+    };
+    layout();
+    s.scale.on('resize', layout);
+
+    const startFromTap = () => {
+      // Request fullscreen (gesture allowed)
+      if (!s.scale.isFullscreen) s.scale.startFullscreen().catch(()=>{ /* ignore failures */ });
+      // Start game
+      s.awaitingFirstTap = false;
+      overlay.destroy();
+      s.physics.world.resume();
+      s.player.play('base-run');
+
+      // Build mobile HUD now (after the tap)
+      if (s.isTouchDevice && !s.mobileHUD) {
+        s.mobileHUD = buildMobileHUD(s);
+      }
+    };
+
+    // Any tap on overlay triggers start
+    bg.on('pointerdown', startFromTap);
+    box.on('pointerdown', startFromTap);
+    txt.on('pointerdown', startFromTap);
+  }
+
+  // -------- Orientation Gate builder (portrait message + input block)
+  function buildOrientationGate(s) {
+    const overlay = s.add.container(0,0).setDepth(1000).setScrollFactor(0);
+    const bg = s.add.rectangle(0,0,W,H,0x000000,0.55).setOrigin(0,0).setInteractive(); // interactive to block input
+    const box = s.add.rectangle(W/2, H/2, Math.min(560, W*0.9), 120, 0xffffff, 0.95).setStrokeStyle(2,0x000000,0.6);
+    const txt = s.add.text(W/2, H/2, 'Rotate your device to landscape for the best experience', {
+      fontFamily:'monospace', fontSize: 16, color:'#000', align:'center', wordWrap:{ width: Math.min(520, W*0.85) }
+    }).setOrigin(0.5);
+    overlay.add([bg, box, txt]);
+
+    const layout = () => {
+      bg.setSize(W, H);
+      box.setPosition(W/2, H/2).setSize(Math.min(560, W*0.9), 120);
+      txt.setPosition(W/2, H/2).setWordWrapWidth(Math.min(520, W*0.85), true);
+    };
+
+    const show = (v) => overlay.setVisible(v);
+
+    // Initial state
+    layout();
+    show(s.scale.orientation === Phaser.Scale.PORTRAIT);
+
+    // Respond to orientation & resize
+    s.scale.on('orientationchange', (o) => {
+      show(o === Phaser.Scale.PORTRAIT);
+      layout();
+    });
+    s.scale.on('resize', layout);
+  }
+
+  // -------- Mobile HUD builder (left jump zone, right throw zone, restart + fullscreen buttons)
+  function buildMobileHUD(s) {
+    const hud = s.add.container(0,0).setDepth(20).setScrollFactor(0);
+
+    // Tutorial banner
+    const tut = s.add.text(W/2, 24, 'Tap left to JUMP • Tap right to THROW', {
+      fontFamily:'monospace', fontSize: 14, color:'#000'
+    }).setOrigin(0.5,0).setAlpha(0.9);
+    hud.add(tut);
+    s.time.delayedCall(3000, ()=> s.tweens.add({ targets: tut, alpha: 0, duration: 600, onComplete: ()=>tut.destroy() }));
+
+    // Left jump zone
+    const leftZone = s.add.rectangle(0, 0, W*0.5, H, 0x000000, 0.0001)
+      .setOrigin(0,0).setInteractive({ useHandCursor: true });
+    leftZone.on('pointerdown', () => { s.jumpQueuedAt = s.time.now; });
+    leftZone.on('pointerup',   () => { s.jumpReleased = true; });
+    leftZone.on('pointerout',  () => { s.jumpReleased = true; });
+    hud.add(leftZone);
+
+    // Right throw zone
+    const rightZone = s.add.rectangle(W*0.5, 0, W*0.5, H, 0x000000, 0.0001)
+      .setOrigin(0,0).setInteractive({ useHandCursor: true });
+    rightZone.on('pointerdown', () => doThrow(s));
+    hud.add(rightZone);
+
+    // Restart button
+    const rBtn = s.add.circle(W - 42, H - 42, 22, 0x000000, 0.12).setStrokeStyle(2, 0x000000, 0.5).setInteractive({ useHandCursor: true });
+    const rTxt = s.add.text(W - 42, H - 42, 'R', { fontFamily:'monospace', fontSize: 18, color:'#000' }).setOrigin(0.5);
+    rBtn.on('pointerdown', ()=> { if (s.gameOver) s.scene.restart(); });
+    hud.add([rBtn, rTxt]);
+
+    // Fullscreen toggle (still available after first-tap)
+    const fsBtn = s.add.rectangle(W - 42, 42, 28, 28, 0x000000, 0.10).setStrokeStyle(2, 0x000000, 0.5).setInteractive({ useHandCursor: true });
+    const fsTxt = s.add.text(W - 42, 42, '⛶', { fontFamily:'monospace', fontSize: 16, color:'#000' }).setOrigin(0.5);
+    fsBtn.on('pointerdown', ()=> {
+      if (!s.scale.isFullscreen) s.scale.startFullscreen();
+      else s.scale.stopFullscreen();
+    });
+    hud.add([fsBtn, fsTxt]);
+
+    // Keep HUD positioned on resize
+    const layoutHUD = () => {
+      rBtn.setPosition(W - 42, H - 42); rTxt.setPosition(W - 42, H - 42);
+      fsBtn.setPosition(W - 42, 42);    fsTxt.setPosition(W - 42, 42);
+      leftZone.setPosition(0,0).setSize(W*0.5, H);
+      rightZone.setPosition(W*0.5,0).setSize(W*0.5, H);
+    };
+    layoutHUD();
+    s.scale.on('resize', layoutHUD);
+
+    // Fade restart button when not usable
+    s.events.on('update', ()=>{
+      rBtn.setAlpha(s.gameOver ? 1.0 : 0.35);
+    });
+
+    return hud;
   }
 
   // ---------------- helpers ----------------
@@ -280,19 +406,14 @@
     if (s.gameOver) return;
     s.gameOver = true;
 
-    // Stop physics & motion
     s.physics.world.pause();
-
-    // Stop anims
     s.player.anims.pause();
     s.arms.anims.pause();
 
-    // Disable remaining bodies
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
 
-    // Stop any power-up visuals
     stopBlink(s);
     s.superBanner.setVisible(false);
     s.player.clearTint();
@@ -304,42 +425,36 @@
     s.restartTxt.setText('Press R to Restart');
   }
 
-  // Zap/destroy any obstacle the ninja touches while invincible
   function zapObstacle(s, o) {
     if (!o || !o.active) return;
     o.setTint(0x99fffd);
     s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); });
-    s.score += 2; // tiny bonus for smashing through
+    s.score += 2;
   }
 
-  // ----- Power-up: speed + invincible + full-height banner + warning blink + trail -----
+  // ----- Power-up: speed + invincible + banner + warning blink + trail -----
   function activatePowerUp(s) {
-    // Already active? Refresh timers, keep collider disabled, keep trail
     if (s.invincible) {
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
-      stopBlink(s); // reset warning pulses
+      stopBlink(s);
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
-      // ensure collider stays off
       if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
 
     s.invincible = true;
     s.speedMult = POWERUP_SPEED_MULT;
-    s.player.setTint(0x8ef1ff); // subtle cyan tint
+    s.player.setTint(0x8ef1ff);
     s.superBanner.setVisible(true);
     if (s.trailParticles) s.trailParticles.start();
 
-    // Disable collider so obstacles don't push ninja back
     if (s._obstacleCollider) s._obstacleCollider.active = false;
 
-    // Re-scale existing movers’ velocities to match new multiplier
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
 
-    // Timers
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
     s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
   }
@@ -351,41 +466,20 @@
     s.superBanner.setVisible(false);
     if (s.trailParticles) s.trailParticles.stop();
 
-    // Re-enable collider for normal play
     if (s._obstacleCollider) s._obstacleCollider.active = true;
 
-    // Cancel timers & blink
     if (s._powerupTimer) s._powerupTimer.remove(false);
     if (s._warnTimer) s._warnTimer.remove(false);
     stopBlink(s);
 
-    // Adjust movers back down
     rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
   }
 
   function startBlink(s) {
-    // Safety: avoid duplicates
     stopBlink(s);
-
-    // Ninja blink (alpha pulse)
-    s._blinkTweenPlayer = s.tweens.add({
-      targets: s.player,
-      alpha: 0.45,
-      duration: 120,
-      yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
-    });
-
-    // Banner blink (alpha pulse)
-    s._blinkTweenBanner = s.tweens.add({
-      targets: s.superBanner,
-      alpha: 0.4,
-      duration: 120,
-      yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2
-    });
+    s._blinkTweenPlayer = s.tweens.add({ targets: s.player,      alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
+    s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4,  duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
   }
-
   function stopBlink(s) {
     if (s._blinkTweenPlayer) { s._blinkTweenPlayer.stop(); s._blinkTweenPlayer = null; }
     if (s._blinkTweenBanner) { s._blinkTweenBanner.stop(); s._blinkTweenBanner = null; }
@@ -396,16 +490,14 @@
   function rescaleMoversForSpeedChange(s, prevMult, newMult) {
     if (prevMult === newMult) return;
     const scale = newMult / prevMult;
-
     s.obstacles.children.each(o => { if (o.active && o.body && o.body.velocity) o.body.velocity.x *= scale; });
     s.collectibles.children.each(c => { if (c.active && c.body && c.body.velocity) c.body.velocity.x *= scale; });
     s.shurikens.children.each(b => { if (b.active && b.body && b.body.velocity) b.body.velocity.x *= scale; });
-
     s._prevSpeedMult = newMult;
   }
-  // ---------------------------------------------------
 
-  // Spawns
+  // ---------------------------------------------------
+  // Spawns (unchanged from stable)
   function createGroundObstacle(s) {
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
 
@@ -441,11 +533,9 @@
   }
 
   function spawnCollectible(s) {
-    // Spawn in a safe “lane” above ground enemies, below flyers
     const y = Phaser.Math.Between(GROUND_Y - 90, GROUND_Y - 60);
     const item = s.collectibles.create(W + 20, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
     item.setVelocityX(-(s.worldSpeed * s.speedMult));
-    // Make it pop a little
     item.setScale(1.1);
     s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 400, repeat: -1 });
     return item;
@@ -495,7 +585,12 @@
 
   // ---------------- update ----------------
   function update(time, delta) {
-    const s = this; if (s.gameOver) return;
+    const s = this;
+
+    // Block gameplay updates until first tap on mobile
+    if (s.awaitingFirstTap) return;
+
+    if (s.gameOver) return;
 
     const elapsed = s.time.now - s.startTime;
     s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
