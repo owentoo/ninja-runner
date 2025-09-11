@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — All Upgrades</title>
+  <title>Ninja Runner — Mobile-Safe Start + Hard Ramp</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -25,6 +25,8 @@
 
     .hint { font:12px/1.4 monospace; color:#333; text-align:center; padding:6px 10px; background:#f2f2f2; }
     #rotate-overlay .sheet { background:rgba(0,0,0,.85); }
+    /* non-blocking rotate hint while running */
+    #rotate-overlay.running { pointer-events:none; background:rgba(0,0,0,.18); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
@@ -121,7 +123,7 @@
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
   const COLLECTIBLE_BASE_INTERVAL = 13500, COLLECTIBLE_INTERVAL_JITTER = 4500;
 
-  // DPR (dynamic drop if struggling)
+  // DPR
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
   // DOM refs
@@ -188,9 +190,6 @@
     for (let i=0;i<2;i++) solid(this,'ptero'+i,48,24,0x000000);
     makeCollectibleTex(this);
     this.load.image('collectible','collectible.png');
-
-    // Optional SFX (safe to fail if files don't exist)
-    // this.load.audio('hit',['hit.mp3']);
   }
 
   function ensureBGAndGroundTextures(s){
@@ -210,8 +209,8 @@
   }
 
   // ======= Scene =======
-  let sessionDeathsQuick = 0;   // adaptive easing if player dies fast twice
-  let sessionLongRun = false;   // boost cap if they last long
+  let sessionDeathsQuick = 0;
+  let sessionLongRun = false;
 
   function create(){
     const s=this; scene = s; ensureBGAndGroundTextures(s);
@@ -286,7 +285,6 @@
       }
     });
 
-    // Edge-tap forgiveness: ignore tiny drifts for throws/jumps (handled implicitly by half detection).
     s.input.on('pointerup', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       const moved = Math.abs(pointer.worldX - touchDownX);
@@ -323,7 +321,6 @@
         o.setData('hit', true); o.setTint(0xffff66);
         s.cameras.main.shake(60, 0.004);
         s.time.delayedCall(60, ()=>{ if (o.active) o.disableBody(true, true); s.score += (3 + s.difficulty * 0.5); });
-        // try{ s.sound.play('hit',{ volume:0.3, detune:Phaser.Math.Between(-50,50)});}catch{}
       }
     });
     s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
@@ -333,10 +330,10 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start paused under overlays
+    // Start paused under overlays until Start
     s.physics.world.pause();
 
-    // Pause on visibility change (fairness)
+    // Pause on visibility change (fairness), but never because of rotate once running
     document.addEventListener('visibilitychange', ()=> {
       if (!scene) return;
       if (document.hidden && s.gameStarted && !s.gameOver) s.physics.world.pause();
@@ -410,7 +407,6 @@
     stopBlink(s);
     s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
     s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
-    // small slow-mo nudge
     const oldScale = s.time.timeScale; s.time.timeScale = 0.85;
     s.time.delayedCall(400, ()=>{ s.time.timeScale = oldScale; });
   }
@@ -567,17 +563,12 @@
     });
 
     if (time > s.nextSpawn) {
-      // Telegraph burst: quick ground flash
       telegraphBurst(s);
-
-      // spawn one immediately
       spawnObstacle(s);
 
-      // base interval that shrinks with difficulty
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
 
-      // Burst patterns: chance for quick follow-ups (double / triple)
-      const burstChance = Math.min(0.15 + s.difficulty * 0.06, 0.65); // up to 65%
+      const burstChance = Math.min(0.15 + s.difficulty * 0.06, 0.65);
       if (Math.random() < burstChance) {
         const delay = Phaser.Math.Between(160, 320);
         s.time.delayedCall(delay, () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
@@ -594,24 +585,16 @@
       s.nextCollectible = now + collectibleInterval();
     }
 
-    // Recycle off-screen
     s.obstacles.children.each(o => { if (o.active && o.x < -sx(40)) { o.disableBody(true, true); s.score += (1 + s.difficulty * 0.1); } });
     s.collectibles.children.each(c => { if (c.active && c.x < -sx(40)) c.disableBody(true, true); });
 
-    // HUD
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
-    const sp = (s.worldSpeed/300).toFixed(2); // relative to base 300
+    const sp = (s.worldSpeed/300).toFixed(2);
     s.speedText.setText('Speed× ' + sp);
-
-    // Dynamic resolution throttle (very light heuristic)
-    if (delta > 26 && game.loop.actualFps < 45 && game.scale.resolution > 1) {
-      // (Phaser doesn't allow dynamic change of resolution easily without restart,
-      // so we keep it conservative—left as a no-op hint)
-    }
   }
 
   function telegraphBurst(s){
-    s.tweens.add({ targets: s.groundFront, alpha: 0.85, duration: 80, yoyo: true, repeat: 1, onStart:()=>{}, onComplete:()=>{ s.groundFront.setAlpha(1); }});
+    s.tweens.add({ targets: s.groundFront, alpha: 0.85, duration: 80, yoyo: true, repeat: 1, onComplete:()=>{ s.groundFront.setAlpha(1); }});
   }
 
   // ======= Flow (full-panel overlays) =======
@@ -627,21 +610,42 @@
     s.gameOver = false;
     s.gameStarted = true;
 
-    s.jumpQueuedAt = -Infinity;
-    s.jumpReleased = false;
-    s.lastOnGroundAt = s.time.now;
-
+    // Make absolutely sure physics and animation resume:
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
     s.player.anims.resume();
 
+    s.jumpQueuedAt = -Infinity;
+    s.jumpReleased = false;
+    s.lastOnGroundAt = s.time.now;
+
     s.startTime = s.time.now;
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
+
+    // Try to enter fullscreen on mobile (non-blocking)
+    if (isMobile() && !document.fullscreenElement && !document.webkitFullscreenElement) {
+      (async () => {
+        try {
+          if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
+          else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
+          try { await screen.orientation?.lock?.('landscape'); } catch {}
+          outer.classList.add('fs');
+          game.scale.refresh();
+        } catch {}
+      })();
+    }
+
+    updateUX(); // mark rotate hint as non-blocking while running
   }
   startCTA.addEventListener('click', startRun);
   splash2.addEventListener('click', (e)=>{ if (e.target === splash2) startRun(); });
   window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
+  // Global “start anyway” failsafe: click stage to proceed/start
+  document.getElementById('stage').addEventListener('click', () => {
+    if (splash1.classList.contains('show')) { hide(splash1); show(splash2); return; }
+    if (splash2.classList.contains('show')) { startRun(); return; }
+  });
 
   function restartRun() {
     const s = scene; if (!s) return;
@@ -678,6 +682,8 @@
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
     s.player.anims.resume();
+
+    updateUX();
   }
   restartCTA.addEventListener('click', restartRun);
   gameover.addEventListener('click', (e)=>{ if (e.target === gameover) restartRun(); });
@@ -716,17 +722,29 @@
     game.scale.refresh();
   });
 
-  // ======= Rotate/UX – pause/resume only, no rebuilds =======
+  // ======= Rotate/UX – never pause a running game =======
   function updateUX() {
     const onMobile = isMobile();
-    const showRotate = onMobile && isPortrait();
+    const portrait = isPortrait();
+
+    // Show rotate overlay:
+    // - before starting a run, it blocks (to encourage landscape)
+    // - after run starts, it's a non-blocking hint (no pause)
+    const allowBlocking = !scene || !scene.gameStarted || scene.gameOver;
+    const showRotate = onMobile && portrait;
+
     rotate.classList.toggle('show', showRotate);
+    rotate.classList.toggle('running', showRotate && !allowBlocking && scene && scene.gameStarted && !scene.gameOver);
     fsBtn.classList.toggle('show', onMobile);
 
     try {
       if (!scene) return;
-      if (showRotate && scene.gameStarted && !scene.gameOver) scene.physics.world.pause();
-      else if (!showRotate && scene.gameStarted && !scene.gameOver) scene.physics.world.resume();
+      // Only pause because of rotate BEFORE starting a run
+      if (allowBlocking && showRotate) {
+        scene.physics.world.pause();
+      } else if (scene.gameStarted && !scene.gameOver) {
+        scene.physics.world.resume();
+      }
     } catch {}
   }
   window.addEventListener('resize', () => { updateUX(); game.scale.refresh(); });
