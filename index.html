@@ -28,8 +28,8 @@
     #rotate-overlay.running { pointer-events:none; background:rgba(0,0,0,.18); }
   </style>
 
-  <!-- Use a very reliable CDN + defer so Phaser is ready before our code runs -->
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js" integrity="sha512-4NJSyD8g4O4k6QflH1iA0K8v5QYT8m8m4t7l2u6E2kqW+2nM8x1rL3I6E2x8mE4n+8g5k4j0m1L1H6I6C8m1nQ==" crossorigin="anonymous"></script>
+  <!-- Load Phaser synchronously (no integrity, version pinned) -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
 <body>
   <div id="game-outer">
@@ -61,7 +61,7 @@
       <div id="gameover" class="overlay">
         <div class="sheet">
           <h2>Game Over</h2>
-          <p>Your Score: <b id="final-score">0</b></p>
+        <p>Your Score: <b id="final-score">0</b></p>
           <button id="restart-cta" class="cta">Restart</button>
         </div>
       </div>
@@ -82,10 +82,9 @@
 
 <script>
 (() => {
-  // If Phaser failed to load, bail early with a clear message
+  // If Phaser still didn't load, stop here (won't happen with the script tag above unless network is offline).
   if (!window.Phaser) {
-    console.error('Phaser did not load. Check CDN/network. Game init aborted.');
-    alert('Network hiccup: game engine failed to load. Refresh the page.');
+    console.error('Phaser did not load. Check network or CDN.');
     return;
   }
 
@@ -154,27 +153,21 @@
   let game;
   let scene; // cached reference after boot
 
-  try {
-    game = new Phaser.Game({
-      type: Phaser.AUTO,
-      render: { roundPixels: true, powerPreference: 'high-performance' },
-      backgroundColor: '#87ceeb',
-      canvas: document.getElementById('game'),
-      resolution: DPR,
-      physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-      scale: {
-        parent: 'stage', width: W, height: H,
-        mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH,
-        fullscreenTarget: 'game-outer',
-        expandParent: true
-      },
-      scene: { preload, create, update }
-    });
-  } catch (e) {
-    console.error('Failed to create Phaser.Game:', e);
-    alert('Your browser blocked WebGL/Canvas initialization. Try refreshing or a different browser.');
-    return;
-  }
+  game = new Phaser.Game({
+    type: Phaser.AUTO,
+    render: { roundPixels: true, powerPreference: 'high-performance' },
+    backgroundColor: '#87ceeb',
+    canvas: document.getElementById('game'),
+    resolution: DPR,
+    physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
+    scale: {
+      parent: 'stage', width: W, height: H,
+      mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH,
+      fullscreenTarget: 'game-outer',
+      expandParent: true
+    },
+    scene: { preload, create, update }
+  });
 
   // ======= Helper for overlays =======
   const show = (el) => el.classList.add('show');
