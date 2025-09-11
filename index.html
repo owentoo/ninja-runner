@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Mobile-Safe Start + Hard Ramp</title>
+  <title>Ninja Runner — Stable Boot + Hard Ramp</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -25,10 +25,11 @@
 
     .hint { font:12px/1.4 monospace; color:#333; text-align:center; padding:6px 10px; background:#f2f2f2; }
     #rotate-overlay .sheet { background:rgba(0,0,0,.85); }
-    /* non-blocking rotate hint while running */
     #rotate-overlay.running { pointer-events:none; background:rgba(0,0,0,.18); }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+
+  <!-- Use a very reliable CDN + defer so Phaser is ready before our code runs -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js" integrity="sha512-4NJSyD8g4O4k6QflH1iA0K8v5QYT8m8m4t7l2u6E2kqW+2nM8x1rL3I6E2x8mE4n+8g5k4j0m1L1H6I6C8m1nQ==" crossorigin="anonymous"></script>
 </head>
 <body>
   <div id="game-outer">
@@ -81,6 +82,13 @@
 
 <script>
 (() => {
+  // If Phaser failed to load, bail early with a clear message
+  if (!window.Phaser) {
+    console.error('Phaser did not load. Check CDN/network. Game init aborted.');
+    alert('Network hiccup: game engine failed to load. Refresh the page.');
+    return;
+  }
+
   // ======= URL Modes =======
   const params = new URLSearchParams(location.search);
   const MODE = (params.get('mode')||'classic').toLowerCase(); // classic | hard | endless
@@ -113,7 +121,7 @@
   // Parallax
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
-  // Jump forgiveness unchanged per request
+  // Jump forgiveness unchanged
   const COYOTE_TIME_MS = 120, JUMP_BUFFER_MS = 120, JUMP_CUTOFF_FACTOR = 0.5;
 
   const SHURIKEN_DISPLAY = su(20), SHURIKEN_BODY = su(16);
@@ -128,6 +136,7 @@
 
   // DOM refs
   const outer = document.getElementById('game-outer');
+  const stageEl = document.getElementById('stage');
   const rotate = document.getElementById('rotate-overlay');
   const splash1 = document.getElementById('splash-1');
   const splash2 = document.getElementById('splash-2');
@@ -145,21 +154,27 @@
   let game;
   let scene; // cached reference after boot
 
-  game = new Phaser.Game({
-    type: Phaser.AUTO,                       // WEBGL first, falls back to CANVAS
-    render: { roundPixels: true, powerPreference: 'high-performance' },
-    backgroundColor: '#87ceeb',
-    canvas: document.getElementById('game'),
-    resolution: DPR,
-    physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    scale: {
-      parent: 'stage', width: W, height: H,
-      mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH,
-      fullscreenTarget: 'game-outer',
-      expandParent: true
-    },
-    scene: { preload, create, update }
-  });
+  try {
+    game = new Phaser.Game({
+      type: Phaser.AUTO,
+      render: { roundPixels: true, powerPreference: 'high-performance' },
+      backgroundColor: '#87ceeb',
+      canvas: document.getElementById('game'),
+      resolution: DPR,
+      physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
+      scale: {
+        parent: 'stage', width: W, height: H,
+        mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH,
+        fullscreenTarget: 'game-outer',
+        expandParent: true
+      },
+      scene: { preload, create, update }
+    });
+  } catch (e) {
+    console.error('Failed to create Phaser.Game:', e);
+    alert('Your browser blocked WebGL/Canvas initialization. Try refreshing or a different browser.');
+    return;
+  }
 
   // ======= Helper for overlays =======
   const show = (el) => el.classList.add('show');
@@ -173,6 +188,7 @@
 
   function preload(){
     solid(this,'px',2,2,0x000000);
+    // If these fail to load, placeholders below will cover us.
     this.load.image('bgClouds','bg_clouds.png');
     this.load.image('bgMountains','bg_mountains.png');
     this.load.image('bgHills','bg_hills.png');
@@ -203,8 +219,8 @@
   // ======= Fairness helper =======
   function minSafeGap(s){
     const runSpeed = s.worldSpeed * s.speedMult;
-    const jumpAirTime = Math.abs(JUMP_VELOCITY) / GRAVITY * 2; // simple ballistic estimate
-    const react = 0.35; // reaction buffer
+    const jumpAirTime = Math.abs(JUMP_VELOCITY) / GRAVITY * 2;
+    const react = 0.35;
     return Math.round((runSpeed * (jumpAirTime + react)) + sx(80));
   }
 
@@ -250,7 +266,7 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // Particles (for power)
+    // Particles
     s.trailParticles = s.add.particles(0, 0, 'px', {
       lifespan: 220, speed: 0, quantity: 1, frequency: 22,
       scale: { start: 1.1, end: 0 }, alpha: { start: 0.65, end: 0 },
@@ -330,10 +346,10 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start paused under overlays until Start
+    // Start paused under overlays
     s.physics.world.pause();
 
-    // Pause on visibility change (fairness), but never because of rotate once running
+    // Visibility pause (but never rotate-pause after start)
     document.addEventListener('visibilitychange', ()=> {
       if (!scene) return;
       if (document.hidden && s.gameStarted && !s.gameOver) s.physics.world.pause();
@@ -522,11 +538,8 @@
     const s=this;
     if (!s.gameStarted || s.gameOver) return;
 
-    // adaptive: raise cap if long run
     const maxDiff = sessionLongRun ? MAX_DIFF + 1 : MAX_DIFF;
-
     const elapsed = s.time.now - s.startTime;
-    // ease-in if player died quickly twice
     const startPenalty = sessionDeathsQuick >= 2 ? -1 : 0;
     const baseDiff = Math.floor(elapsed / DIFF_EVERY_MS) + Math.max(0, startPenalty);
     s.difficulty = Math.min(maxDiff, Math.max(0, baseDiff));
@@ -597,7 +610,7 @@
     s.tweens.add({ targets: s.groundFront, alpha: 0.85, duration: 80, yoyo: true, repeat: 1, onComplete:()=>{ s.groundFront.setAlpha(1); }});
   }
 
-  // ======= Flow (full-panel overlays) =======
+  // ======= Flow (overlays) =======
   function toControls() { hide(splash1); show(splash2); }
   splash1Next.addEventListener('click', toControls);
   splash1.addEventListener('click', (e)=>{ if (e.target === splash1) toControls(); });
@@ -610,7 +623,6 @@
     s.gameOver = false;
     s.gameStarted = true;
 
-    // Make absolutely sure physics and animation resume:
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
     s.player.anims.resume();
@@ -623,26 +635,12 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Try to enter fullscreen on mobile (non-blocking)
-    if (isMobile() && !document.fullscreenElement && !document.webkitFullscreenElement) {
-      (async () => {
-        try {
-          if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
-          else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
-          try { await screen.orientation?.lock?.('landscape'); } catch {}
-          outer.classList.add('fs');
-          game.scale.refresh();
-        } catch {}
-      })();
-    }
-
-    updateUX(); // mark rotate hint as non-blocking while running
+    updateUX(); // mark rotate hint as non-blocking
   }
   startCTA.addEventListener('click', startRun);
   splash2.addEventListener('click', (e)=>{ if (e.target === splash2) startRun(); });
   window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
-  // Global “start anyway” failsafe: click stage to proceed/start
-  document.getElementById('stage').addEventListener('click', () => {
+  stageEl.addEventListener('click', () => {
     if (splash1.classList.contains('show')) { hide(splash1); show(splash2); return; }
     if (splash2.classList.contains('show')) { startRun(); return; }
   });
@@ -689,7 +687,7 @@
   gameover.addEventListener('click', (e)=>{ if (e.target === gameover) restartRun(); });
   window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartRun(); });
 
-  // ======= Fullscreen (no rebuild) =======
+  // ======= Fullscreen (optional) =======
   async function lockLandscape() { try { await screen.orientation?.lock?.('landscape'); } catch {} }
   async function enterFullscreen() {
     try {
@@ -727,9 +725,6 @@
     const onMobile = isMobile();
     const portrait = isPortrait();
 
-    // Show rotate overlay:
-    // - before starting a run, it blocks (to encourage landscape)
-    // - after run starts, it's a non-blocking hint (no pause)
     const allowBlocking = !scene || !scene.gameStarted || scene.gameOver;
     const showRotate = onMobile && portrait;
 
@@ -739,7 +734,6 @@
 
     try {
       if (!scene) return;
-      // Only pause because of rotate BEFORE starting a run
       if (allowBlocking && showRotate) {
         scene.physics.world.pause();
       } else if (scene.gameStarted && !scene.gameOver) {
