@@ -2,41 +2,40 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Responsive + Splash + Game Over + Robust Restart + Mobile FS</title>
-
-  <!-- Mobile viewport + PWA-friendly -->
+  <title>Ninja Runner — Stable Restart + YouTube-style Mobile FS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-
   <style>
-    /* Gray outside the game to see bounds clearly */
     html, body { height: 100%; margin: 0; background: #d9d9d9; }
 
-    /* OUTER fills viewport; remains gray behind stage */
     #game-outer {
       position: relative;
       width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
-      background: transparent;
-      overflow: hidden;
+      background: transparent; overflow: hidden;
     }
-    /* "Immersive" fallback toggles */
+
+    /* Immersive fallback toggles */
     .immersive body { overflow: hidden; }
     .immersive #game-outer { height: 100dvh; }
 
-    /* STAGE = Phaser parent; gray in letterbox; 1100px max on desktop */
+    /* STAGE = Phaser parent; max 1100px on desktop; gray shows bounds */
     #stage {
       position: relative;
       width: min(100%, 1100px);
       aspect-ratio: 1280 / 592;
       height: auto;
       display: grid; place-items: center;
-      background: #d9d9d9;                /* gray shows game frame edges */
+      background: #d9d9d9;
       box-shadow: inset 0 0 0 2px #b5b5b5;
       border-radius: 6px;
+      transition: none; /* prevent CSS animation during freeze */
     }
-    /* Fullscreen: stage fills; hide frame line */
+    /* When we freeze layout, we set explicit px width/height; keep letterbox off */
+    #stage.frozen { aspect-ratio: auto !important; }
+
+    /* Fullscreen: stage fills fully */
     #game-outer.fs #stage {
       width: 100svw; height: 100svh; aspect-ratio: auto;
       border-radius: 0; box-shadow: none;
@@ -45,7 +44,7 @@
     canvas { display: block; }
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
 
-    /* Generic overlay */
+    /* Overlays */
     .overlay {
       position: absolute; inset: 0;
       display: none; align-items: center; justify-content: center;
@@ -66,7 +65,7 @@
       background: #00b894; color: #0b1b16; cursor: pointer;
     }
 
-    /* Fullscreen button (mobile – both orientations) */
+    /* Fullscreen button (mobile both orientations) */
     #fs-btn {
       position: absolute; right: 10px; top: 10px; z-index: 11;
       padding: 8px 10px; border: 0; border-radius: 12px;
@@ -83,7 +82,7 @@
     <div id="stage">
       <canvas id="game"></canvas>
 
-      <!-- Splash 1: “tap to start” -->
+      <!-- Splash 1 -->
       <div id="splash-1" class="overlay show">
         <div class="sheet">
           <h2>Ninja Runner</h2>
@@ -92,18 +91,18 @@
         </div>
       </div>
 
-      <!-- Splash 2: controls + CTA -->
+      <!-- Splash 2 -->
       <div id="splash-2" class="overlay">
         <div class="sheet">
           <h2>How to Play</h2>
-          <p>Jump: <b>↑</b> or <b>Space</b> or <b>Tap Left Half</b></p>
-          <p>Throw: <b>X</b> or <b>Click/Tap Right Half</b></p>
+          <p>Jump: <b>↑</b> / <b>Space</b> / <b>Tap Left Half</b></p>
+          <p>Throw: <b>X</b> / <b>Click/Tap Right Half</b></p>
           <p>Restart: <b>Space</b> (desktop) or <b>Tap</b> (mobile)</p>
           <button id="start-cta" class="cta">Start</button>
         </div>
       </div>
 
-      <!-- Game Over overlay -->
+      <!-- Game Over -->
       <div id="gameover" class="overlay">
         <div class="sheet">
           <h2>Game Over</h2>
@@ -113,11 +112,11 @@
         </div>
       </div>
 
-      <!-- Rotate overlay (mobile portrait) -->
+      <!-- Rotate notice (mobile portrait) -->
       <div id="rotate-overlay" class="overlay" role="dialog" aria-live="assertive">
         <div class="sheet">
           <h2>Rotate to Landscape</h2>
-          <p>For the best experience, turn your device sideways.<br/>Or tap Fullscreen to fill the screen.</p>
+          <p>Turn your device sideways, or tap Fullscreen.</p>
         </div>
       </div>
 
@@ -151,22 +150,53 @@
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 6000, POWERUP_WARN_MS = 1000;
   const COLLECTIBLE_BASE_INTERVAL = 10000, COLLECTIBLE_INTERVAL_JITTER = 4000;
 
-  // ======= RESPONSIVE / REBUILD (FIT <-> ENVELOP) =======
+  // ======= RESPONSIVE / REBUILD =======
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   let game = null;
   let currentScaleMode = Phaser.Scale.FIT;
-  let resumeImmediately = false; // restart directly into gameplay (skip splash)
+  let resumeImmediately = false; // restart straight into play
+
+  const outer = document.getElementById('game-outer');
+  const stage = document.getElementById('stage');
+  const rotate = document.getElementById('rotate-overlay');
+  const splash1 = document.getElementById('splash-1');
+  const splash2 = document.getElementById('splash-2');
+  const gameover = document.getElementById('gameover');
+  const startCTA = document.getElementById('start-cta');
+  const restartCTA = document.getElementById('restart-cta');
+  const fsBtn = document.getElementById('fs-btn');
 
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
 
-  function buildGame(scaleMode) {
+  // ---------- LAYOUT FREEZE to prevent jitter during restart/fullscreen ----------
+  function freezeStageSize() {
+    const r = stage.getBoundingClientRect();
+    stage.classList.add('frozen');
+    stage.style.width  = Math.round(r.width) + 'px';
+    stage.style.height = Math.round(r.height) + 'px';
+  }
+  function unfreezeStageSize() {
+    stage.style.width = '';
+    stage.style.height = '';
+    stage.classList.remove('frozen');
+  }
+
+  // Build game, wait one frame, refresh scale, then unfreeze (if asked)
+  async function buildGame(scaleMode, { freezeDuringBuild = false } = {}) {
     currentScaleMode = scaleMode;
-    if (game) { game.destroy(true); game = null; }
+    if (freezeDuringBuild) freezeStageSize();
+
+    if (game) { try { game.destroy(true); } catch {} game = null; }
+
+    // Hide canvas during rebuild to avoid any flash/jitter
+    const canvas = document.getElementById('game');
+    canvas.style.visibility = 'hidden';
+
     game = new Phaser.Game({
       type: Phaser.CANVAS,
       backgroundColor: '#87ceeb',
-      canvas: document.getElementById('game'),
+      canvas,
       resolution: DPR,
       physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
       scale: {
@@ -177,6 +207,12 @@
       },
       scene: { preload, create, update }
     });
+
+    // Wait two RAFs to ensure layout/boot complete, then refresh scale
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try { game.scale.refresh(); } catch {}
+    canvas.style.visibility = 'visible';
+    if (freezeDuringBuild) unfreezeStageSize();
   }
 
   // ======= PLACEHOLDERS =======
@@ -246,7 +282,6 @@
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
-    // Start run anim, then pause until game start
     s.player.play('base-run'); s.player.anims.pause();
 
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
@@ -304,16 +339,16 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Pause physics until start; or immediately resume on restart
+    // Start state
     if (resumeImmediately) {
       s.gameStarted = true;
       s.physics.world.resume();
       s.player.anims.resume();
       s.startTime = s.time.now;
       resumeImmediately = false;
-      document.getElementById('splash-1').classList.remove('show');
-      document.getElementById('splash-2').classList.remove('show');
-      document.getElementById('gameover').classList.remove('show');
+      splash1.classList.remove('show');
+      splash2.classList.remove('show');
+      gameover.classList.remove('show');
     } else {
       s.physics.world.pause();
     }
@@ -330,9 +365,8 @@
     stopBlink(s); s.superBanner?.setVisible(false); s.player.clearTint();
     s.invincible=false; s.speedMult=1.0; if (s.trailParticles) s.trailParticles.stop();
 
-    // Show DOM Game Over with score
     document.getElementById('final-score').textContent = Math.floor(s.score);
-    document.getElementById('gameover').classList.add('show');
+    gameover.classList.add('show');
   }
 
   function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
@@ -507,20 +541,8 @@
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= DOM Overlays & Controls =======
-  const outer = document.getElementById('game-outer');
-  const rotate = document.getElementById('rotate-overlay');
-  const splash1 = document.getElementById('splash-1');
-  const splash2 = document.getElementById('splash-2');
-  const gameover = document.getElementById('gameover');
-  const startCTA = document.getElementById('start-cta');
-  const restartCTA = document.getElementById('restart-cta');
-  const fsBtn = document.getElementById('fs-btn');
-
-  function toControls() {
-    splash1.classList.remove('show');
-    splash2.classList.add('show');
-  }
+  // ======= Flow: splash, start, restart =======
+  function toControls() { splash1.classList.remove('show'); splash2.classList.add('show'); }
   splash1.addEventListener('click', toControls);
   window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
 
@@ -535,36 +557,40 @@
   startCTA.addEventListener('click', actuallyStartGame);
   window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) actuallyStartGame(); });
 
-  // 🔁 Robust restart: rebuild Phaser instance & jump straight into play
-  function restartGame() {
+  // Robust restart: freeze layout, rebuild, resume immediately (no jitter)
+  async function restartGame() {
     gameover.classList.remove('show');
     resumeImmediately = true;
-    const mode = currentScaleMode;
-    try { game.destroy(true); } catch {}
-    buildGame(mode);
+    await buildGame(currentScaleMode, { freezeDuringBuild: true });
   }
   restartCTA.addEventListener('click', restartGame);
   window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartGame(); });
   gameover.addEventListener('click', restartGame);
 
-  // ======= Fullscreen with immersive fallback =======
+  // ======= Fullscreen like YouTube =======
   function canGoFullscreen() {
     const el = outer;
     return el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen || el.mozRequestFullScreen;
   }
+  async function lockLandscape() {
+    try { await screen.orientation?.lock?.('landscape'); } catch {}
+  }
   async function enterFullscreen() {
-    const el = outer;
     try {
-      if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' });
-      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen(); // iOS/Safari
-      else if (el.msRequestFullscreen) el.msRequestFullscreen();
-      else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
-      // if we got here, native FS likely engaged
+      if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
+      else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
+      else if (outer.msRequestFullscreen) outer.msRequestFullscreen();
+      else if (outer.mozRequestFullScreen) outer.mozRequestFullScreen();
+      await lockLandscape();
       document.documentElement.classList.remove('immersive');
-      buildGame(Phaser.Scale.ENVELOP);
-    } catch (e) {
-      // Fallback immersive if native FS not allowed
-      goImmersive(true);
+      outer.classList.add('fs');
+      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
+    } catch {
+      // Immersive fallback
+      document.documentElement.classList.add('immersive');
+      outer.classList.add('fs'); // still let stage fill
+      window.scrollTo(0,1);
+      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
     }
   }
   async function exitFullscreen() {
@@ -572,13 +598,9 @@
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (document.webkitFullscreenElement) document.webkitExitFullscreen?.();
     } catch {}
-    goImmersive(false);
-    buildGame(Phaser.Scale.FIT);
-  }
-  function goImmersive(on) {
-    document.documentElement.classList.toggle('immersive', on);
-    // Scroll a tick to hide address bar where possible
-    setTimeout(()=>{ window.scrollTo(0,1); }, 16);
+    document.documentElement.classList.remove('immersive');
+    outer.classList.remove('fs');
+    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: true });
   }
 
   fsBtn.addEventListener('click', async () => {
@@ -589,30 +611,19 @@
     }
   });
 
-  document.addEventListener('fullscreenchange', () => {
-    outer.classList.toggle('fs', !!document.fullscreenElement || !!document.webkitFullscreenElement);
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      // Exited native FS -> ensure not stuck immersive
-      document.documentElement.classList.remove('immersive');
-      if (currentScaleMode !== Phaser.Scale.FIT) buildGame(Phaser.Scale.FIT);
-    } else {
-      if (currentScaleMode !== Phaser.Scale.ENVELOP) buildGame(Phaser.Scale.ENVELOP);
-    }
-    updateUX();
-    if (game) game.scale.refresh();
+  document.addEventListener('fullscreenchange', async () => {
+    const fs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
+    outer.classList.toggle('fs', fs);
+    // Rebuild with matching scale (covered above by enter/exit handlers), keep refresh here too:
+    if (game) { await new Promise(r => requestAnimationFrame(r)); game.scale.refresh(); }
   });
 
-  // VisualViewport sizing helps on mobile toolbars
-  const vv = window.visualViewport;
-  if (vv) {
-    vv.addEventListener('resize', ()=>{ if (document.documentElement.classList.contains('immersive')) { /* keep 100dvh fresh */ } });
-  }
-
+  // Rotate/UX
   function updateUX() {
     const onMobile = isMobile();
     const showRotate = onMobile && isPortrait();
     rotate.classList.toggle('show', showRotate);
-    fsBtn.classList.toggle('show', onMobile); // show FS button on mobile in both orientations
+    fsBtn.classList.toggle('show', onMobile);
     try {
       if (!game) return;
       const s = game.scene.scenes[0]; if (!s) return;
@@ -620,14 +631,16 @@
       else if (!showRotate && s.gameStarted && !s.gameOver) s.physics.world.resume();
     } catch {}
   }
-
   window.addEventListener('resize', () => { updateUX(); if (game) game.scale.refresh(); });
   window.addEventListener('orientationchange', () => { updateUX(); if (game) game.scale.refresh(); });
   window.addEventListener('pageshow', updateUX);
 
   // Boot
-  buildGame(Phaser.Scale.FIT);
-  updateUX();
+  (async () => {
+    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: false });
+    updateUX();
+  })();
+
 })();
 </script>
 </body>
