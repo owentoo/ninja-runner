@@ -1,8 +1,8 @@
- <!doctype html>
+<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Single Instance + Solid Restart</title>
+  <title>Ninja Runner — Harder Ramp + Touch Jumps</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -97,7 +97,7 @@
       <div id="splash-2" class="overlay">
         <div class="sheet">
           <h2>How to Play</h2>
-          <p>Jump: <b>↑</b> / <b>Space</b> / <b>Tap Left Half</b></p>
+          <p>Jump: <b>↑</b> / <b>Space</b> / <b>Tap Left Half</b> (short tap = short hop; long press = higher jump)</p>
           <p>Throw: <b>X</b> / <b>Tap Right Half</b></p>
           <p>Restart: <b>Space</b> (desktop) or <b>Tap</b> (mobile)</p>
           <button id="start-cta" class="cta">Start</button>
@@ -138,18 +138,32 @@
   const GROUND_RATIO = 0.833;
   const GROUND_Y = Math.round(H * GROUND_RATIO);
 
-  // ======= GAME CONSTANTS =======
+  // ======= GAME CONSTANTS (tougher ramp, same jump forgiveness) =======
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
-  const OBSTACLE_BASE_INTERVAL = 1200;
-  const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
-  const SHURIKEN_SPEED_BASE = 600;
-  const GROUND_ENEMY_PROBABILITY = 0.45;
+
+  // Spawn pacing / ramp
+  const OBSTACLE_BASE_INTERVAL = 980;         // faster base spawn
+  const MAX_DIFF = 12;                        // more steps of difficulty
+  const DIFF_EVERY_MS = 8000;                 // difficulty increases every 8s
+  const SPEED_STEP = 34;                      // world speed rises faster
+  const INTERVAL_FACTOR = 0.88;               // interval shrinks quicker
+
+  // Combat / mix
+  const SHURIKEN_SPEED_BASE = 650;
+  const GROUND_ENEMY_PROBABILITY = 0.45;      // base; flying increases with diff
+
+  // Parallax
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
+
+  // Jump forgiveness unchanged per request
   const COYOTE_TIME_MS = 120, JUMP_BUFFER_MS = 120, JUMP_CUTOFF_FACTOR = 0.5;
+
   const SHURIKEN_DISPLAY = su(20), SHURIKEN_BODY = su(16);
   const THROW_OFFSET = { x: sx(14), y: -sy(38) };
-  const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 6000, POWERUP_WARN_MS = 1000;
-  const COLLECTIBLE_BASE_INTERVAL = 10000, COLLECTIBLE_INTERVAL_JITTER = 4000;
+
+  // Powerups: rarer & shorter (same speed burst)
+  const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
+  const COLLECTIBLE_BASE_INTERVAL = 13500, COLLECTIBLE_INTERVAL_JITTER = 4500;
 
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
@@ -249,7 +263,8 @@
 
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W, sy(4)).refreshBody();
 
-    s.player = s.physics.add.sprite(sx(120), GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
+    // Player start moved +100px right (from sx(120) to sx(220))
+    s.player = s.physics.add.sprite(sx(220), GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
     s.player.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
@@ -279,10 +294,34 @@
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
 
+    // --- Mobile jump: short tap = short hop; long press = higher jump ---
+    s.touchJumpPointerId = null;
+    s.jumpHeldByTouch = false;
+    s.touchWasLeftHalf = false;
+
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       const isLeft = pointer.worldX < (W * 0.5);
-      if (isLeft) s.jumpQueuedAt = s.time.now; else doThrow(s);
+      if (isLeft) {
+        // begin jump intent (hold until pointerup)
+        s.touchJumpPointerId = pointer.id;
+        s.touchWasLeftHalf = true;
+        s.jumpHeldByTouch = true;
+        s.jumpQueuedAt = s.time.now;   // use existing buffer
+        s.jumpReleased = false;        // allow full jump while held
+      } else {
+        doThrow(s);
+      }
+    });
+
+    s.input.on('pointerup', (pointer) => {
+      if (!s.gameStarted || s.gameOver) return;
+      if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
+        s.jumpReleased = true;         // triggers variable height cutoff
+        s.jumpHeldByTouch = false;
+        s.touchWasLeftHalf = false;
+        s.touchJumpPointerId = null;
+      }
     });
 
     s.input.keyboard.on('keydown-UP',    ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
@@ -405,7 +444,9 @@
     if (makeEnemy){
       const e = s.obstacles.create(W + sx(20), GROUND_Y, 'enemyRun', 0).setOrigin(0.5,1).setDepth(4.2);
       e.play('enemy-run');
-      e.setVelocityX(-(s.worldSpeed * s.speedMult));
+      // slightly faster; scales with difficulty
+      const extra = 20 + s.difficulty * 6;
+      e.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
       e.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
       e.setData('destructible', true);
       return e;
@@ -420,19 +461,27 @@
   }
 
   function createFlyingObstacle(s){
-    const laneTop = GROUND_Y - sy(0.18 * BASE.H);
-    const laneBot = GROUND_Y - sy(0.14 * BASE.H);
+    // higher lanes & wider spread at higher difficulty
+    const laneTop = GROUND_Y - sy(0.22 * BASE.H);
+    const laneBot = GROUND_Y - sy(0.12 * BASE.H);
     const f = s.obstacles.create(W + sx(20), Phaser.Math.Between(laneTop,laneBot), 'ptero0')
       .setOrigin(0.5,1).setDepth(4.2);
     f.setDisplaySize(su(48), su(24));
     f.body.setSize(su(48), su(24)).setOffset(0,0);
     f.play('ptero-fly');
-    f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50) * s.speedMult);
+
+    // faster than ground, scales with difficulty
+    const extra = 40 + s.difficulty * 8;
+    f.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
     f.setData('destructible', true);
     return f;
   }
 
-  function spawnObstacle(s){ (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s); }
+  function spawnObstacle(s){
+    // flying gains weight with difficulty (caps at 75%)
+    const flyWeight = Math.min(0.25 + s.difficulty * 0.05, 0.75);
+    (Math.random() < flyWeight) ? createFlyingObstacle(s) : createGroundObstacle(s);
+  }
 
   function spawnCollectible(s){
     const y = Phaser.Math.Between(GROUND_Y - sy(0.20 * BASE.H), GROUND_Y - sy(0.15 * BASE.H));
@@ -458,7 +507,6 @@
     b.setActive(true).setVisible(true).setOrigin(0.5);
     b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
 
-    // Body may already exist; only enable if needed
     if (!b.body) s.physics.world.enable(b);
     b.body.setAllowGravity(false);
     b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
@@ -528,10 +576,25 @@
     });
 
     if (time > s.nextSpawn) {
+      // spawn one immediately
       spawnObstacle(s);
+
+      // base interval that shrinks with difficulty
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
-      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
+
+      // Burst patterns: chance for quick follow-ups (double / triple)
+      const burstChance = Math.min(0.15 + s.difficulty * 0.06, 0.65); // up to 65%
+      if (Math.random() < burstChance) {
+        const delay = Phaser.Math.Between(160, 320);
+        s.time.delayedCall(delay, () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
+        if (Math.random() < 0.25 && s.difficulty >= 6) {
+          s.time.delayedCall(delay + Phaser.Math.Between(140, 240), () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
+        }
+      }
+
+      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-260, 260);
     }
+
     if (now > s.nextCollectible) {
       spawnCollectible(s);
       s.nextCollectible = now + collectibleInterval();
@@ -586,10 +649,10 @@
     s.collectibles.clear(true, true);
     s.shurikens.clear(true, true);
 
-    // Reset player
+    // Reset player (remain +100px right)
     s.player.body.enable = true;
     s.player.setActive(true).setVisible(true);
-    s.player.setPosition(sx(120), GROUND_Y);
+    s.player.setPosition(sx(220), GROUND_Y);
     s.player.setVelocity(0, 0);
     s.player.setAlpha(1).clearTint();
 
