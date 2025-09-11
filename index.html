@@ -2,93 +2,74 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Responsive + Fullscreen</title>
+  <title>Ninja Runner — Responsive (FIT) + Mobile FS (ENVELOP)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { color-scheme: light; }
     html, body { height: 100%; margin: 0; background: #f2f2f2; }
-
-    /* Fill the viewport and center the game; let Scale Manager handle sizing */
     #game-wrap {
-      position: relative;
-      width: 100svw;   /* viewport that ignores iOS browser UI */
-      height: 100svh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #87ceeb; /* matches game bg to make “bars” invisible */
-      overflow: hidden;
+      position: relative; width: 100svw; height: 100svh;
+      display: flex; align-items: center; justify-content: center;
+      background: #87ceeb; overflow: hidden;
     }
     canvas { display: block; }
-    .hint {
-      font: 12px/1.4 monospace; color: #333;
-      text-align: center; padding: 6px 10px;
-      background: #f2f2f2;
-    }
+    .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
 
-    /* Rotate overlay shown on phones in portrait */
+    /* Portrait rotate overlay */
     #rotate-overlay {
-      position: absolute; inset: 0;
-      display: none; align-items: center; justify-content: center;
-      background: rgba(0,0,0,.78); color: #fff;
-      text-align: center; padding: 24px;
+      position: absolute; inset: 0; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,.78); color:#fff; z-index: 10; text-align:center; padding: 24px;
       font: 600 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto;
-      z-index: 10;
     }
     #rotate-overlay.show { display: flex; }
     #rotate-overlay .card {
       max-width: 440px; border-radius: 14px; padding: 18px 16px;
-      background: rgba(255,255,255,.08); backdrop-filter: blur(6px);
-      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); backdrop-filter: blur(6px);
     }
 
-    /* Minimal fullscreen button for mobile */
+    /* Fullscreen button shows only on mobile portrait */
     #fs-btn {
       position: absolute; right: 10px; top: 10px; z-index: 9;
       padding: 8px 10px; border: 0; border-radius: 12px;
       font: 12px/1 system-ui, -apple-system, Segoe UI, Roboto;
-      background: #000; color: #fff; opacity: .92; cursor: pointer;
-      touch-action: manipulation;
+      background: #000; color: #fff; opacity: .95; cursor: pointer;
+      display: none; touch-action: manipulation;
     }
-
-    /* Hide the button on wide desktop screens by default */
-    @media (min-aspect-ratio: 16/10) {
-      #fs-btn { display: none; }
-    }
+    #fs-btn.show { display: inline-block; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
 <body>
   <div id="game-wrap">
     <canvas id="game"></canvas>
-
     <button id="fs-btn" aria-label="Enter fullscreen">⤢ Fullscreen</button>
-
     <div id="rotate-overlay" role="dialog" aria-live="assertive">
       <div class="card">
-        <div style="font-size:16px;margin-bottom:6px;">Rotate to Landscape</div>
-        <div>For the best experience, turn your device sideways.<br/>Tap the button above to enter fullscreen.</div>
+        <div style="font-size:16px;margin-bottom:6px;">Rotate to Landscape (or Fullscreen)</div>
+        <div>For the best experience, turn your device sideways.<br/>Or tap Fullscreen to fill the screen.</div>
       </div>
     </div>
   </div>
-
   <div class="hint">↑/SPACE = jump • X/click = throw • R = restart</div>
 
 <script>
 (() => {
-  // ---------------- constants ----------------
-  // Keep your design-space. Phaser will scale to screen.
-  const W = 800, H = 300;
-  const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
-  const GROUND_Y = 250;
+  // ======= CONFIG YOU ASKED FOR =======
+  // New 844:390 ≈ 2.164:1 aspect at 1280 wide ⇒ H ≈ 592
+  const W = 1280, H = 592;
 
+  // Put ground where it *was* proportionally: old 250/300 ≈ 0.833
+  const GROUND_RATIO = 0.833;                     // ground height as % of H
+  const GROUND_Y = Math.round(H * GROUND_RATIO);  // pixel Y for ground top
+
+  // ----- original constants (kept) -----
+  const FRAME = { w: 48, h: 48, ptero: { w: 48, h: 24 } };
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
   const OBSTACLE_BASE_INTERVAL = 1200;
-
   const MAX_DIFF = 8, DIFF_EVERY_MS = 15000, SPEED_STEP = 25, INTERVAL_FACTOR = 0.92;
   const SHURIKEN_SPEED_BASE = 600;
-
   const GROUND_ENEMY_PROBABILITY = 0.45;
+
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
   const COYOTE_TIME_MS = 120;
@@ -106,106 +87,89 @@
   const COLLECTIBLE_BASE_INTERVAL = 10000;
   const COLLECTIBLE_INTERVAL_JITTER = 4000;
 
-  // -------- responsive, high-DPI, fullscreen-friendly config ----------
-  const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // cap at 2 for perf
-  const game = window.NINJA = new Phaser.Game({
-    type: Phaser.CANVAS,
-    backgroundColor: '#87ceeb',
-    canvas: document.getElementById('game'),
-    physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    resolution: DPR,
-    // Scale Manager is now in charge of sizing & centering
-    scale: {
-      mode: Phaser.Scale.FIT,             // preserve aspect, no crop (letterbox will match bg color)
-      autoCenter: Phaser.Scale.CENTER_BOTH,
-      parent: 'game-wrap',
-      width: W,
-      height: H,
-      fullscreenTarget: 'game-wrap',
-      expandParent: true
-    },
-    scene: { preload, create, update }
-  });
+  // ======= RESPONSIVE / REBUILD PIPELINE =======
+  const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let game = null;
+  let currentScaleMode = Phaser.Scale.FIT; // default on load
 
-  // ---------------- helper placeholder makers ----------------
-  function solid(scene, key, w, h, color) {
-    const g = scene.add.graphics();
-    g.fillStyle(color, 1).fillRect(0,0,w,h);
-    g.generateTexture(key, w, h);
-    g.destroy();
-  }
-  function makePattern(scene, key, w, h, baseColor, stripeColor, stripeStep=6, stripeAlpha=0.18) {
-    const g = scene.add.graphics();
-    g.fillStyle(baseColor, 1).fillRect(0,0,w,h);
-    g.lineStyle(1, stripeColor, stripeAlpha);
-    for (let y=stripeStep; y<h; y+=stripeStep) g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));
-    g.generateTexture(key, w, h); g.destroy();
-  }
-  function makeCrate(scene) {
-    const key='crateRect', w=48, h=48, b=1;
-    const g = scene.add.graphics();
-    g.fillStyle(0x8a6f3b, 1).fillRect(0,0,w,h);
-    g.lineStyle(3, 0x3f2d14, 1).strokeRect(b,b,w-2*b,h-2*b);
-    g.generateTexture(key, w, h); g.destroy();
-  }
-  function makeCollectibleTex(scene) {
-    const key='collectible';
-    const size=20;
-    const g = scene.add.graphics();
-    g.fillStyle(0xfff066, 1).fillCircle(size/2, size/2, size/2);
-    g.lineStyle(2, 0xffb200, 1).strokeCircle(size/2, size/2, (size/2)-1);
-    g.generateTexture(key, size, size);
-    g.destroy();
+  const isMobile = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
+  const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
+
+  function buildGame(scaleMode) {
+    currentScaleMode = scaleMode;
+    if (game) { game.destroy(true); game = null; }
+
+    game = new Phaser.Game({
+      type: Phaser.CANVAS,
+      backgroundColor: '#87ceeb',
+      canvas: document.getElementById('game'),
+      resolution: DPR,
+      physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
+      scale: {
+        parent: 'game-wrap',
+        width: W,
+        height: H,
+        mode: scaleMode,                       // FIT (default) or ENVELOP (fullscreen cover)
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        fullscreenTarget: 'game-wrap',
+        expandParent: true
+      },
+      scene: { preload, create, update }
+    });
   }
 
-  // ---------------- preload ----------------
-  function preload() {
-    solid(this, 'px', 2, 2, 0x000000);
-    this.load.image('bgClouds',       'bg_clouds.png');
-    this.load.image('bgMountains',    'bg_mountains.png');
-    this.load.image('bgHills',        'bg_hills.png');
-    this.load.image('groundBackTile', 'ground_back_tile.png');
+  // ======= SCENE (your gameplay, with minor relative-Y tweaks) =======
+  function solid(scene, key, w, h, color){const g=scene.add.graphics();g.fillStyle(color,1).fillRect(0,0,w,h);g.generateTexture(key,w,h);g.destroy();}
+  function makePattern(scene,key,w,h,base,stripe,step=6,a=0.18){const g=scene.add.graphics();g.fillStyle(base,1).fillRect(0,0,w,h);g.lineStyle(1,stripe,a);for(let y=step;y<h;y+=step)g.strokeLineShape(new Phaser.Geom.Line(0,y,w,y));g.generateTexture(key,w,h);g.destroy();}
+  function makeCrate(scene){const k='crateRect',w=48,h=48,b=1;const g=scene.add.graphics();g.fillStyle(0x8a6f3b,1).fillRect(0,0,w,h);g.lineStyle(3,0x3f2d14,1).strokeRect(b,b,w-2*b,h-2*b);g.generateTexture(k,w,h);g.destroy();}
+  function makeCollectibleTex(scene){const k='collectible',size=20;const g=scene.add.graphics();g.fillStyle(0xfff066,1).fillCircle(size/2,size/2,size/2);g.lineStyle(2,0xffb200,1).strokeCircle(size/2,size/2,(size/2)-1);g.generateTexture(k,size,size);g.destroy();}
+
+  function preload(){
+    solid(this,'px',2,2,0x000000);
+    this.load.image('bgClouds','bg_clouds.png');
+    this.load.image('bgMountains','bg_mountains.png');
+    this.load.image('bgHills','bg_hills.png');
+    this.load.image('groundBackTile','ground_back_tile.png');
     this.load.image('groundFrontTile','ground_front_tile.png');
-    this.load.spritesheet('ninjaRun', 'ninja_run.png', { frameWidth: 48, frameHeight: 55 });
-    this.load.spritesheet('enemyRun', 'ninja_run_enemy.png', { frameWidth: 48, frameHeight: 55 });
-    this.load.image('shuriken', 'shuriken.png');
-    this.load.image('superBanner', 'super.png');
-    for (let i=0;i<2;i++) solid(this, 'arms'+i, FRAME.w, FRAME.h, 0xff8a8a);
-    for (let i=0;i<2;i++) solid(this, 'armsThrow'+i, FRAME.w, FRAME.h, 0xff5252);
-    solid(this, 'cactusRect', 16, 26, 0x000000);
+    this.load.spritesheet('ninjaRun','ninja_run.png',{frameWidth:48,frameHeight:55});
+    this.load.spritesheet('enemyRun','ninja_run_enemy.png',{frameWidth:48,frameHeight:55});
+    this.load.image('shuriken','shuriken.png');
+    this.load.image('superBanner','super.png');
+    for (let i=0;i<2;i++) solid(this,'arms'+i,FRAME.w,FRAME.h,0xff8a8a);
+    for (let i=0;i<2;i++) solid(this,'armsThrow'+i,FRAME.w,FRAME.h,0xff5252);
+    solid(this,'cactusRect',16,26,0x000000);
     makeCrate(this);
-    for (let i=0;i<2;i++) solid(this, 'ptero'+i, FRAME.ptero.w, FRAME.ptero.h, 0x000000);
+    for (let i=0;i<2;i++) solid(this,'ptero'+i,FRAME.ptero.w,FRAME.ptero.h,0x000000);
     makeCollectibleTex(this);
-    this.load.image('collectible', 'collectible.png');
+    this.load.image('collectible','collectible.png');
   }
 
-  // ---------------- create ----------------
-  function ensureBGAndGroundTextures(s) {
-    if (!s.textures.exists('bgClouds'))    makePattern(s, 'bgClouds', 256, 80, 0xffffff, 0x000000, 8, 0.10);
-    if (!s.textures.exists('bgMountains')) makePattern(s, 'bgMountains',256, 90, 0xa0b1c2,0x000000,10, 0.12);
-    if (!s.textures.exists('bgHills'))     makePattern(s, 'bgHills',    256, 70, 0x7b8fa6,0x000000, 8, 0.12);
-    if (!s.textures.exists('groundBackTile'))  makePattern(s, 'groundBackTile', 128, 18, 0x8b5a2b, 0x000000, 6, 0.18);
-    if (!s.textures.exists('groundFrontTile')) makePattern(s, 'groundFrontTile',128, 28, 0x6b3f1f, 0x000000, 6, 0.20);
+  function ensureBGAndGroundTextures(s){
+    if (!s.textures.exists('bgClouds'))    makePattern(s,'bgClouds',256,Math.round(H*0.135),0xffffff,0x000000,8,0.10);
+    if (!s.textures.exists('bgMountains')) makePattern(s,'bgMountains',256,Math.round(H*0.152),0xa0b1c2,0x000000,10,0.12);
+    if (!s.textures.exists('bgHills'))     makePattern(s,'bgHills',256,Math.round(H*0.118),0x7b8fa6,0x000000,8,0.12);
+    if (!s.textures.exists('groundBackTile'))  makePattern(s,'groundBackTile',128,Math.round(H*0.030),0x8b5a2b,0x000000,6,0.18);
+    if (!s.textures.exists('groundFrontTile')) makePattern(s,'groundFrontTile',128,Math.round(H*0.047),0x6b3f1f,0x000000,6,0.20);
   }
 
-  function create() {
-    const s = this;
-    ensureBGAndGroundTextures(s);
+  function create(){
+    const s=this; ensureBGAndGroundTextures(s);
 
     s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
-    s.speedMult = 1.0; s._prevSpeedMult = 1.0; s.invincible = false;
+    s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
 
-    s.bgClouds    = s.add.tileSprite(0, 60, W*2, 80, 'bgClouds').setOrigin(0,0).setDepth(0);
-    s.bgMountains = s.add.tileSprite(0, 90, W*2, 90, 'bgMountains').setOrigin(0,0).setDepth(1);
-    s.bgHills     = s.add.tileSprite(0,130, W*2, 70, 'bgHills').setOrigin(0,0).setDepth(2);
+    // Parallax layers adapted to new H
+    s.bgClouds    = s.add.tileSprite(0, Math.round(H*0.10), W*2, Math.round(H*0.135),'bgClouds').setOrigin(0,0).setDepth(0);
+    s.bgMountains = s.add.tileSprite(0, Math.round(H*0.152),W*2, Math.round(H*0.152),'bgMountains').setOrigin(0,0).setDepth(1);
+    s.bgHills     = s.add.tileSprite(0, Math.round(H*0.22), W*2, Math.round(H*0.118),'bgHills').setOrigin(0,0).setDepth(2);
 
-    const superHeight = GROUND_Y;
-    s.superBanner = s.add.tileSprite(0, 0, W*2, superHeight, 'superBanner')
+    // Super banner fills from top to ground
+    s.superBanner = s.add.tileSprite(0,0,W*2,GROUND_Y,'superBanner')
       .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
 
-    s.groundBack  = s.add.tileSprite(0, GROUND_Y-8,  W*2, 18, 'groundBackTile').setOrigin(0,0).setDepth(3.0);
-    s.groundFront = s.add.tileSprite(0, GROUND_Y-2,  W*2, 28, 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
+    s.groundBack  = s.add.tileSprite(0, GROUND_Y- Math.round(H*0.014),  W*2, Math.round(H*0.030), 'groundBackTile').setOrigin(0,0).setDepth(3.0);
+    s.groundFront = s.add.tileSprite(0, GROUND_Y- Math.round(H*0.003),  W*2, Math.round(H*0.047), 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
 
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W,4).refreshBody();
 
@@ -242,36 +206,26 @@
     s.lastOnGroundAt = s.time.now; s.jumpQueuedAt = -Infinity; s.jumpReleased = false;
     s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
-    s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
-    s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-UP',      ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-SPACE',   ()=>{ s.jumpReleased = true; });
 
     s.scoreText   = s.add.text(14, 12, 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
-    s.gameOverTxt = s.add.text(W/2, H/2 - 10, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
-    s.restartTxt  = s.add.text(W/2, H/2 + 16, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
+    s.gameOverTxt = s.add.text(W/2, H/2 - 16, '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
+    s.restartTxt  = s.add.text(W/2, H/2 + 12, '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
-    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => {
-      if (!s.invincible) endGame(s);
-    });
-    s.physics.add.overlap(s.player, s.obstacles, (player, o) => {
-      if (s.invincible) zapObstacle(s, o);
-    });
+    s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => { if (!s.invincible) endGame(s); });
+    s.physics.add.overlap(s.player, s.obstacles, (player, o) => { if (s.invincible) zapObstacle(s, o); });
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
       if (!b.active || !o.active) return;
       if (o.getData('hit')) { b.destroy(); return; }
       b.destroy();
       if (o.getData('destructible')) {
-        o.setData('hit', true);
-        o.setTint(0xffff66);
-        s.time.delayedCall(60, ()=>{
-          if (o.active) o.destroy();
-          s.score += (3 + s.difficulty * 0.5);
-        });
+        o.setData('hit', true); o.setTint(0xffff66);
+        s.time.delayedCall(60, ()=>{ if (o.active) o.destroy(); s.score += (3 + s.difficulty * 0.5); });
       }
     });
     s.physics.add.overlap(s.player, s.collectibles, (player, item)=>{
-      if (!item.active) return;
-      item.destroy();
-      activatePowerUp(s);
+      if (!item.active) return; item.destroy(); activatePowerUp(s);
     });
 
     s.nextSpawn = 0;
@@ -279,25 +233,20 @@
     s.player.play('base-run');
   }
 
-  // ---------------- helpers (unchanged gameplay) ----------------
-  function collectibleInterval() { return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
-  function endGame(s) {
-    if (s.gameOver) return;
-    s.gameOver = true; s.physics.world.pause();
+  function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
+  function endGame(s){
+    if (s.gameOver) return; s.gameOver = true; s.physics.world.pause();
     s.player.anims.pause(); s.arms.anims.pause();
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
     stopBlink(s); s.superBanner.setVisible(false); s.player.clearTint();
-    s.invincible = false; s.speedMult = 1.0; if (s.trailParticles) s.trailParticles.stop();
+    s.invincible=false; s.speedMult=1.0; if (s.trailParticles) s.trailParticles.stop();
     s.gameOverTxt.setText('GAME OVER'); s.restartTxt.setText('Press R to Restart');
   }
-  function zapObstacle(s, o) {
-    if (!o || !o.active) return;
-    o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2;
-  }
-  function activatePowerUp(s) {
-    if (s.invincible) {
+  function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
+  function activatePowerUp(s){
+    if (s.invincible){
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
       stopBlink(s);
@@ -307,102 +256,89 @@
       if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
-    s.invincible = true; s.speedMult = POWERUP_SPEED_MULT; s.player.setTint(0x8ef1ff);
+    s.invincible = true; s.speedMult=POWERUP_SPEED_MULT; s.player.setTint(0x8ef1ff);
     s.superBanner.setVisible(true); if (s.trailParticles) s.trailParticles.start();
     if (s._obstacleCollider) s._obstacleCollider.active = false;
-    rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
+    rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
     s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
   }
-  function deactivatePowerUp(s) {
-    s.invincible = false; s.speedMult = 1.0; s.player.clearTint();
+  function deactivatePowerUp(s){
+    s.invincible=false; s.speedMult=1.0; s.player.clearTint();
     s.superBanner.setVisible(false); if (s.trailParticles) s.trailParticles.stop();
     if (s._obstacleCollider) s._obstacleCollider.active = true;
     if (s._powerupTimer) s._powerupTimer.remove(false);
     if (s._warnTimer) s._warnTimer.remove(false);
     stopBlink(s);
-    rescaleMoversForSpeedChange(s, s._prevSpeedMult, s.speedMult);
+    rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
   }
-  function startBlink(s) {
+  function startBlink(s){
     stopBlink(s);
-    s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 });
-    s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true,
-      repeat: Math.ceil(POWERUP_WARN_MS / 240) * 2 });
+    s._blinkTweenPlayer = s.tweens.add({ targets: s.player, alpha: 0.45, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
+    s._blinkTweenBanner = s.tweens.add({ targets: s.superBanner, alpha: 0.4, duration: 120, yoyo: true, repeat: Math.ceil(POWERUP_WARN_MS/240)*2 });
   }
-  function stopBlink(s) {
-    if (s._blinkTweenPlayer) { s._blinkTweenPlayer.stop(); s._blinkTweenPlayer = null; }
-    if (s._blinkTweenBanner) { s._blinkTweenBanner.stop(); s._blinkTweenBanner = null; }
-    if (s.player) s.player.setAlpha(1);
-    if (s.superBanner) s.superBanner.setAlpha(0.9);
-  }
-  function rescaleMoversForSpeedChange(s, prevMult, newMult) {
-    if (prevMult === newMult) return;
-    const scale = newMult / prevMult;
-    s.obstacles.children.each(o => { if (o.active && o.body && o.body.velocity) o.body.velocity.x *= scale; });
-    s.collectibles.children.each(c => { if (c.active && c.body && c.body.velocity) c.body.velocity.x *= scale; });
-    s.shurikens.children.each(b => { if (b.active && b.body && b.body.velocity) b.body.velocity.x *= scale; });
+  function stopBlink(s){ if (s._blinkTweenPlayer){ s._blinkTweenPlayer.stop(); s._blinkTweenPlayer=null; } if (s._blinkTweenBanner){ s._blinkTweenBanner.stop(); s._blinkTweenBanner=null; } if (s.player) s.player.setAlpha(1); if (s.superBanner) s.superBanner.setAlpha(0.9); }
+  function rescaleMoversForSpeedChange(s,prevMult,newMult){
+    if (prevMult===newMult) return; const k=newMult/prevMult;
+    s.obstacles.children.each(o=>{ if (o.active&&o.body&&o.body.velocity) o.body.velocity.x*=k; });
+    s.collectibles.children.each(c=>{ if (c.active&&c.body&&c.body.velocity) c.body.velocity.x*=k; });
+    s.shurikens.children.each(b=>{ if (b.active&&b.body&&b.body.velocity) b.body.velocity.x*=k; });
     s._prevSpeedMult = newMult;
   }
-  function createGroundObstacle(s) {
+  function createGroundObstacle(s){
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
-    if (makeEnemy) {
-      const e = s.obstacles.create(W + 20, GROUND_Y, 'enemyRun', 0).setOrigin(0.5,1).setDepth(4.2);
+    if (makeEnemy){
+      const e = s.obstacles.create(W+20, GROUND_Y, 'enemyRun', 0).setOrigin(0.5,1).setDepth(4.2);
       e.play('enemy-run'); e.setVelocityX(-(s.worldSpeed * s.speedMult));
       e.body.setSize(36,50).setOffset(6,5); e.setData('destructible', true); return e;
     } else {
-      const c = s.obstacles.create(W + 20, GROUND_Y, 'cactusRect').setOrigin(0.5,1).setDepth(4.2);
+      const c = s.obstacles.create(W+20, GROUND_Y, 'cactusRect').setOrigin(0.5,1).setDepth(4.2);
       c.setVelocityX(-(s.worldSpeed * s.speedMult)); c.body.setSize(c.width, c.height).setOffset(0,0);
       c.setData('destructible', false); return c;
     }
   }
-  function createFlyingObstacle(s) {
-    const f = s.obstacles.create(W + 20, Phaser.Math.Between(GROUND_Y-110, GROUND_Y-60), 'ptero0')
-      .setOrigin(0.5,1).setDepth(4.2);
+  function createFlyingObstacle(s){
+    // Flyers now use relative lanes between ~H*0.65 and H*0.77 above ground baseline
+    const laneTop = GROUND_Y - Math.round(H*0.18);
+    const laneBot = GROUND_Y - Math.round(H*0.14);
+    const f = s.obstacles.create(W+20, Phaser.Math.Between(laneTop,laneBot), 'ptero0').setOrigin(0.5,1).setDepth(4.2);
     f.play('ptero-fly');
     f.setVelocityX(-Phaser.Math.Between(s.worldSpeed-30, s.worldSpeed+50) * s.speedMult);
     f.setData('destructible', true);
     return f;
   }
-  function spawnObstacle(s) { (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s); }
-  function spawnCollectible(s) {
-    const y = Phaser.Math.Between(GROUND_Y - 90, GROUND_Y - 60);
-    const item = s.collectibles.create(W + 20, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
+  function spawnObstacle(s){ (Math.random() < 0.65) ? createGroundObstacle(s) : createFlyingObstacle(s); }
+  function spawnCollectible(s){
+    // Safe “lane” between ground enemies and flyers, as % of H
+    const y = Phaser.Math.Between(GROUND_Y - Math.round(H*0.20), GROUND_Y - Math.round(H*0.15));
+    const item = s.collectibles.create(W+20, y, 'collectible').setOrigin(0.5,0.5).setDepth(4.0);
     item.setVelocityX(-(s.worldSpeed * s.speedMult)); item.setScale(1.1);
     s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 400, repeat: -1 });
     return item;
   }
-  function spawnShuriken(s) {
+  function spawnShuriken(s){
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
     const THROW_OFFSET = { x: 14, y: -38 };
-    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'shuriken');
-    if (!b) return;
+    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y, 'shuriken'); if (!b) return;
     const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 20) * s.speedMult;
-    b.setActive(true).setVisible(true).setOrigin(0.5);
-    b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
-    s.physics.world.enable(b);
-    b.body.setAllowGravity(false);
-    b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
-      (SHURIKEN_DISPLAY - SHURIKEN_BODY)/2,
-      (SHURIKEN_DISPLAY - SHURIKEN_BODY)/2
-    );
+    b.setActive(true).setVisible(true).setOrigin(0.5); b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
+    s.physics.world.enable(b); b.body.setAllowGravity(false);
+    b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset((SHURIKEN_DISPLAY-SHURIKEN_BODY)/2,(SHURIKEN_DISPLAY-SHURIKEN_BODY)/2);
     b.setVelocityX(speed); b.setDepth(4.3);
     const rps = SHURIKEN_SPIN_RPS + Phaser.Math.FloatBetween(-SHURIKEN_SPIN_VARIANCE, SHURIKEN_SPIN_VARIANCE);
     b.rotationSpeed = rps * Math.PI * 2;
     s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
   }
-  function doThrow(s) {
-    if (s.gameOver || s.throwing) return;
-    s.throwing = true; s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
+  function doThrow(s){
+    if (s.gameOver || s.throwing) return; s.throwing = true;
+    s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
     s.time.delayedCall(90, ()=> spawnShuriken(s));
     s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
       if (s.gameOver) return; s.throwing = false; s.arms.setVisible(false);
     });
   }
-
-  // ---------------- update ----------------
-  function update(time, delta) {
-    const s = this; if (s.gameOver) return;
+  function update(time, delta){
+    const s=this; if (s.gameOver) return;
     const elapsed = s.time.now - s.startTime;
     s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
     s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
@@ -419,35 +355,25 @@
     const now = s.time.now;
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
-    const canCoyote   = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
-    const hasBuffered = (now - s.jumpQueuedAt)   <= JUMP_BUFFER_MS;
+    const canCoyote = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
+    const hasBuffered = (now - s.jumpQueuedAt) <= JUMP_BUFFER_MS;
 
     if (hasBuffered && (s.player.body.blocked.down || canCoyote)) {
       s.player.setVelocityY(JUMP_VELOCITY);
       s.jumpQueuedAt = -Infinity;
     }
-
     if (s.jumpReleased && s.player.body.velocity.y < 0) {
       s.player.setVelocityY(s.player.body.velocity.y * JUMP_CUTOFF_FACTOR);
       s.jumpReleased = false;
     }
-
-    s.shurikens.children.each(b => {
-      if (!b.active) return;
-      b.rotation += (b.rotationSpeed || 0) * dt;
-      if (b.x > W + 40) b.destroy();
-    });
+    s.shurikens.children.each(b => { if (!b.active) return; b.rotation += (b.rotationSpeed||0) * dt; if (b.x > W + 40) b.destroy(); });
 
     if (time > s.nextSpawn) {
       spawnObstacle(s);
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-300, 300);
     }
-
-    if (now > s.nextCollectible) {
-      spawnCollectible(s);
-      s.nextCollectible = now + collectibleInterval();
-    }
+    if (now > s.nextCollectible) { spawnCollectible(s); s.nextCollectible = now + collectibleInterval(); }
 
     s.obstacles.children.each(o => { if (o.active && o.x < -40) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
     s.collectibles.children.each(c => { if (c.active && c.x < -40) c.destroy(); });
@@ -455,47 +381,55 @@
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ---------------- mobile UX: fullscreen + rotate prompt ----------------
-  const isMobile = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
-  const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
-
+  // ======= UI: Rotate Overlay + Mobile FS Button =======
   const overlay = document.getElementById('rotate-overlay');
-  function updateRotateOverlay() {
-    const show = isMobile() && isPortrait();
-    overlay.classList.toggle('show', show);
-    // Pause physics while prompting; resume when landscape (and not game over)
+  const fsBtn = document.getElementById('fs-btn');
+
+  function updateUX() {
+    const showRotate = isMobile() && isPortrait();
+    overlay.classList.toggle('show', showRotate);
+    fsBtn.classList.toggle('show', showRotate); // show FS button only in mobile portrait
     try {
+      if (!game) return;
       const scene = game.scene.scenes[0];
       if (!scene) return;
-      if (show) scene.physics.world.pause();
+      if (showRotate) scene.physics.world.pause();
       else if (!scene.gameOver) scene.physics.world.resume();
     } catch (e) {}
   }
-  window.addEventListener('resize', updateRotateOverlay);
-  window.addEventListener('orientationchange', updateRotateOverlay);
-  window.addEventListener('pageshow', updateRotateOverlay);
-  updateRotateOverlay();
 
-  // Fullscreen button (required user gesture)
-  const fsBtn = document.getElementById('fs-btn');
+  // Enter/exit fullscreen + rebuild with desired scale mode
   fsBtn.addEventListener('click', async () => {
-    const el = document.getElementById('game-wrap');
-    try {
-      if (!document.fullscreenElement && el.requestFullscreen) {
-        await el.requestFullscreen({ navigationUI: 'hide' });
-        fsBtn.textContent = '⤢ Exit Fullscreen';
-      } else if (document.exitFullscreen) {
-        await document.exitFullscreen();
-        fsBtn.textContent = '⤢ Fullscreen';
-      }
-    } catch(e){ console.warn('Fullscreen not available:', e); }
+    if (!document.fullscreenElement) {
+      // Portrait mobile: go fullscreen + rebuild in ENVELOP
+      try {
+        await document.getElementById('game-wrap').requestFullscreen({ navigationUI: 'hide' });
+      } catch (e) { console.warn('FS denied:', e); }
+      // Rebuild with ENVELOP to cover entire screen (minimal bars; allow safe crop)
+      buildGame(Phaser.Scale.ENVELOP);
+    } else {
+      // Exit fullscreen -> back to FIT
+      try { await document.exitFullscreen(); } catch (e) {}
+      buildGame(Phaser.Scale.FIT);
+    }
   });
+
   document.addEventListener('fullscreenchange', () => {
-    fsBtn.textContent = document.fullscreenElement ? '⤢ Exit Fullscreen' : '⤢ Fullscreen';
-    updateRotateOverlay();
-    // Nudge Scale Manager in case browser UI changed dimensions
-    game.scale.refresh();
+    // If user exits via system gesture, ensure we’re back on FIT
+    if (!document.fullscreenElement && currentScaleMode !== Phaser.Scale.FIT) {
+      buildGame(Phaser.Scale.FIT);
+    }
+    updateUX();
+    if (game) game.scale.refresh();
   });
+
+  window.addEventListener('resize', () => { updateUX(); if (game) game.scale.refresh(); });
+  window.addEventListener('orientationchange', () => { updateUX(); if (game) game.scale.refresh(); });
+  window.addEventListener('pageshow', updateUX);
+
+  // Boot in FIT (desktop + landscape default)
+  buildGame(Phaser.Scale.FIT);
+  updateUX();
 })();
 </script>
 </body>
