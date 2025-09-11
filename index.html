@@ -2,27 +2,22 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Faster Pace + Adaptive Ramp</title>
+  <title>Ninja Runner — Fast, Fair, Reaction-Time Ramp</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <style>
     html, body { height: 100%; margin: 0; background: #d9d9d9; }
     #game-outer {
-      position: relative;
-      width: 100svw; height: 100svh;
+      position: relative; width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
       overflow: hidden; background: transparent;
     }
     #stage {
-      position: relative;
-      width: min(100%, 1100px);
-      aspect-ratio: 1280 / 592;
-      height: auto;
+      position: relative; width: min(100%, 1100px);
+      aspect-ratio: 1280 / 592; height: auto;
       display: grid; place-items: center;
-      background: #d9d9d9;
-      box-shadow: inset 0 0 0 2px #b5b5b5;
-      border-radius: 6px;
+      background: #d9d9d9; box-shadow: inset 0 0 0 2px #b5b5b5; border-radius: 6px;
     }
     #game-outer.fs #stage { width: 100svw; height: 100svh; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
     canvas { display: block; }
@@ -44,7 +39,6 @@
     <div id="stage">
       <canvas id="game"></canvas>
 
-      <!-- Splash 1 -->
       <div id="splash-1" class="overlay show">
         <div class="sheet">
           <h2>Ninja Runner</h2>
@@ -54,18 +48,16 @@
         </div>
       </div>
 
-      <!-- Splash 2 (controls) -->
       <div id="splash-2" class="overlay">
         <div class="sheet">
           <h2>How to Play</h2>
-          <p>Jump: <b>↑</b> / <b>Space</b> / <b>Tap Left Half</b> (short tap = short hop; long press = higher jump)</p>
+          <p>Jump: <b>↑</b> / <b>Space</b> / <b>Tap Left Half</b> (timed jump)</p>
           <p>Throw: <b>X</b> / <b>Tap Right Half</b></p>
           <p>Restart: <b>Space</b> (desktop) or <b>Tap</b> (mobile)</p>
           <button id="start-cta" class="cta">Start</button>
         </div>
       </div>
 
-      <!-- Game Over -->
       <div id="gameover" class="overlay">
         <div class="sheet">
           <h2>Game Over</h2>
@@ -74,7 +66,6 @@
         </div>
       </div>
 
-      <!-- Rotate notice (mobile portrait) -->
       <div id="rotate-overlay" class="overlay" role="dialog" aria-live="assertive">
         <div class="sheet">
           <h2>Rotate to Landscape</h2>
@@ -90,7 +81,7 @@
 
 <script>
 (() => {
-  // ======= DESIGN SPACE & SCALERS =======
+  // ======= DESIGN SPACE =======
   const W = 1280, H = 592;
   const BASE = { W: 1280, H: 592 };
   const sx = (n) => Math.round(n * (W / BASE.W));
@@ -99,41 +90,51 @@
   const GROUND_RATIO = 0.833;
   const GROUND_Y = Math.round(H * GROUND_RATIO);
 
-  // ======= SESSION-LEVEL ADAPTIVE MEMORY (persists across restarts) =======
-  // *** CHANGES: simple adaptive knob that nudges difficulty next run.
-  let sessionSkill = 0; // -2..+3 range, increases with long survival, decreases with quick deaths.
+  // ======= ADAPTIVE (per session, not persisted) =======
+  let sessionSkill = 0; // -2..+3
 
-  // ======= GAME CONSTANTS (faster baseline + steeper ramp) =======
-  const SPEED = 320;                         // *** CHANGES: up from 300 for snappier baseline
-  const GRAVITY = 1500;                      // *** CHANGES: slightly higher for crisp jumps
-  const JUMP_VELOCITY = -540;                // *** CHANGES: match gravity so max jump stays similar
+  // ======= GAME CONSTANTS (fast baseline) =======
+  const SPEED = 320;
+  const GRAVITY = 1525;           // a touch higher for snappier arc
+  const JUMP_VELOCITY = -545;
 
-  // Spawn pacing / ramp
-  const OBSTACLE_BASE_INTERVAL = 920;        // *** CHANGES: spawn a bit faster at start
+  // Shift toward reaction-time (less variable height advantage)
+  const COYOTE_TIME_MS = 140;     // a tad more forgiving
+  const JUMP_BUFFER_MS = 140;
+  const JUMP_CUTOFF_FACTOR = 0.70; // less drop when you release (short vs long closer)
+
+  // Ramp
+  const OBSTACLE_BASE_INTERVAL = 920;
   const MAX_DIFF = 12;
-  const DIFF_EVERY_MS = 7800;                // *** CHANGES: ramp a hair quicker
-  const SPEED_STEP = 36;                     // *** CHANGES: higher step for speed curve
-  const INTERVAL_FACTOR = 0.86;              // *** CHANGES: interval shrinks faster per diff
+  const DIFF_EVERY_MS = 7800;
+  const SPEED_STEP = 36;
+  const INTERVAL_FACTOR = 0.86;
 
-  // Combat / mix
-  const SHURIKEN_SPEED_BASE = 700;           // *** CHANGES: projectiles feel faster
+  // Projectiles / mix
+  const SHURIKEN_SPEED_BASE = 700;
   const GROUND_ENEMY_PROBABILITY = 0.45;
 
-  // Parallax (slightly stronger forward layers for speed feel)
-  const PARALLAX = {
-    clouds:0.22, mountains:0.38, hills:0.60,
-    groundBack:1.08, groundFront:1.26       // *** CHANGES
-  };
-
-  // Jump forgiveness unchanged
-  const COYOTE_TIME_MS = 120, JUMP_BUFFER_MS = 120, JUMP_CUTOFF_FACTOR = 0.5;
-
-  const SHURIKEN_DISPLAY = su(20), SHURIKEN_BODY = su(16);
-  const THROW_OFFSET = { x: sx(14), y: -sy(38) };
+  // Parallax
+  const PARALLAX = { clouds:0.22, mountains:0.38, hills:0.60, groundBack:1.08, groundFront:1.26 };
 
   // Powerups
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
-  const COLLECTIBLE_BASE_INTERVAL = 12800, COLLECTIBLE_INTERVAL_JITTER = 4200; // *** CHANGES: a bit more frequent
+  const COLLECTIBLE_BASE_INTERVAL = 12800, COLLECTIBLE_INTERVAL_JITTER = 4200;
+
+  // ======= FAIRNESS RULES =======
+  const FAIR = {
+    // Minimum clear distance ahead of the last spawned obstacle before another can appear.
+    // Scales with difficulty to remain readable at speed.
+    minGapBasePx: sx(240),
+    minGapPerDiffPx: sx(14),
+    // Extra pad after a burst sequence
+    postBurstPadPx: sx(160),
+    // Flyers must sit high enough over ground path to avoid impossible combos.
+    flyerMinClearancePx: sy(64),
+    // Safe corridor when super ends
+    superSafeAheadPx: sx(360),
+    superSpawnFreezeMs: 700
+  };
 
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
@@ -161,12 +162,7 @@
     canvas: document.getElementById('game'),
     resolution: DPR,
     physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-    scale: {
-      parent: 'stage', width: W, height: H,
-      mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH,
-      fullscreenTarget: 'game-outer',
-      expandParent: true
-    },
+    scale: { parent: 'stage', width: W, height: H, mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH, fullscreenTarget: 'game-outer', expandParent: true },
     scene: { preload, create, update }
   });
 
@@ -215,8 +211,10 @@
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
+    s.spawnFrozenUntil = 0; // for super-end freeze
+    s.lastSpawnTime = 0;
 
-    // *** CHANGES: carry adaptive difficulty from previous run
+    // Carry session bias
     s.skillBias = Phaser.Math.Clamp(sessionSkill, -2, 3);
 
     // Layers
@@ -224,8 +222,7 @@
     s.bgMountains = s.add.tileSprite(0, Math.round(H*0.152),W*2, Math.round(H*0.152),'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0, Math.round(H*0.22), W*2, Math.round(H*0.118),'bgHills').setOrigin(0,0).setDepth(2);
 
-    s.superBanner = s.add.tileSprite(0,0,W*2,GROUND_Y,'superBanner')
-      .setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
+    s.superBanner = s.add.tileSprite(0,0,W*2,GROUND_Y,'superBanner').setOrigin(0,0).setDepth(2.6).setVisible(false).setAlpha(0.9);
 
     s.groundBack  = s.add.tileSprite(0, GROUND_Y- sy(8),  W*2, sy(18), 'groundBackTile').setOrigin(0,0).setDepth(3.0);
     s.groundFront = s.add.tileSprite(0, GROUND_Y- sy(2),  W*2, sy(28), 'groundFrontTile').setOrigin(0,0).setDepth(3.2);
@@ -246,13 +243,13 @@
 
     s.player.play('base-run'); s.player.anims.pause();
 
-    // *** CHANGES: dust trail (always on, subtle); uses 'px' texture, no new files
+    // Dust trail (subtle)
     s.dust = s.add.particles(0,0,'px', {
       lifespan: 260, speed: {min:10,max:40}, angle: {min:200,max:260},
       scale: { start: 0.8, end: 0 }, alpha: { start: 0.25, end: 0 },
       quantity: 1, frequency: 40, tint: 0x000000, follow: s.player, followOffset: { x: -18, y: -8 },
       blendMode: 'MULTIPLY'
-    }); s.dust.stop(); // only starts when run begins
+    }); s.dust.stop();
 
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
@@ -271,31 +268,21 @@
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
 
-    // Touch jumps
-    s.touchJumpPointerId = null;
-    s.jumpHeldByTouch = false;
-    s.touchWasLeftHalf = false;
+    // Touch jumps (timed)
+    s.touchJumpPointerId = null; s.jumpHeldByTouch = false; s.touchWasLeftHalf = false;
 
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       const isLeft = pointer.worldX < (W * 0.5);
       if (isLeft) {
-        s.touchJumpPointerId = pointer.id;
-        s.touchWasLeftHalf = true;
-        s.jumpHeldByTouch = true;
-        s.jumpQueuedAt = s.time.now;
-        s.jumpReleased = false;
-      } else {
-        doThrow(s);
-      }
+        s.touchJumpPointerId = pointer.id; s.touchWasLeftHalf = true; s.jumpHeldByTouch = true;
+        s.jumpQueuedAt = s.time.now; s.jumpReleased = false;
+      } else { doThrow(s); }
     });
     s.input.on('pointerup', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
-        s.jumpReleased = true;
-        s.jumpHeldByTouch = false;
-        s.touchWasLeftHalf = false;
-        s.touchJumpPointerId = null;
+        s.jumpReleased = true; s.jumpHeldByTouch = false; s.touchWasLeftHalf = false; s.touchJumpPointerId = null;
       }
     });
 
@@ -322,7 +309,6 @@
       b.destroy();
       if (o.getData('destructible')) {
         o.setData('hit', true); o.setTint(0xffff66);
-        // *** CHANGES: subtle impact shake
         s.cameras.main.shake(60, 0.002);
         s.time.delayedCall(60, ()=>{ if (o.active) o.destroy(); s.score += (3 + s.difficulty * 0.5); });
       }
@@ -334,49 +320,52 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start paused under overlays
     s.physics.world.pause();
   }
 
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
 
-  // ======= Helpers for pacing/feel =======
-  function animScaleFromSpeed(s){
-    // *** CHANGES: scale animation time with world speed (feels faster)
-    const r = (s.worldSpeed * s.speedMult) / SPEED;
-    return Phaser.Math.Clamp(r, 1.0, 2.6);
-  }
+  // ======= Helpers =======
+  function animScaleFromSpeed(s){ const r = (s.worldSpeed * s.speedMult) / SPEED; return Phaser.Math.Clamp(r, 1.0, 2.6); }
   function applyAnimTimeScales(s){
     const ts = animScaleFromSpeed(s);
     if (s.player?.anims) s.player.anims.timeScale = ts;
+    s.obstacles.children.each(o=>{ if (o.anims) o.anims.timeScale = ts * 0.95; });
+  }
+
+  function msFromPixels(px, scroll){ return (px / Math.max(80, scroll)) * 1000; }
+
+  function fairMinGapMs(s, scroll){
+    const px = FAIR.minGapBasePx + s.difficulty * FAIR.minGapPerDiffPx;
+    return msFromPixels(px, scroll);
+  }
+
+  function clearSafeCorridorAhead(s){
+    const ahead = FAIR.superSafeAheadPx;
     s.obstacles.children.each(o=>{
-      if (o.anims) o.anims.timeScale = ts * 0.95; // enemies a hair slower visually
+      if (!o.active) return;
+      if (o.x >= s.player.x && o.x <= s.player.x + ahead) o.destroy();
     });
   }
 
-  // ======= End / Powerups / Helpers =======
+  // ======= End / Powerups =======
   function endGame(s){
     if (s.gameOver) return;
     s.gameOver = true;
-
     try { s.tweens.killAll(); } catch {}
     try { s.time.removeAllEvents(); } catch {}
-
     s.throwing = false;
     if (s.arms) { s.arms.setVisible(false); s.arms.anims?.stop(); }
-
     s.physics.world.pause();
     s.player.anims.pause();
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
-
     stopBlink(s);
     s.superBanner?.setVisible(false);
     s.player.clearTint();
     s.invincible=false; s.speedMult=1.0;
 
-    // *** CHANGES: update sessionSkill based on survival length
     const survived = (s.time.now - s.startTime) / 1000;
     if (survived >= 50) sessionSkill = Math.min(3, sessionSkill + 1);
     else if (survived <= 10) sessionSkill = Math.max(-2, sessionSkill - 1);
@@ -388,7 +377,6 @@
   function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
 
   function activatePowerUp(s){
-    // *** CHANGES: micro camera shake to sell speed
     s.cameras.main.shake(180, 0.004);
     if (s.invincible){
       if (s._powerupTimer) s._powerupTimer.remove(false);
@@ -398,7 +386,7 @@
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
       if (s._obstacleCollider) s._obstacleCollider.active = false;
-      applyAnimTimeScales(s); // keep sync
+      applyAnimTimeScales(s);
       return;
     }
     s.invincible = true; s.speedMult=POWERUP_SPEED_MULT; s.player.setTint(0x8ef1ff);
@@ -417,6 +405,10 @@
     stopBlink(s);
     rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
     applyAnimTimeScales(s);
+
+    // *** FAIRNESS: clear a corridor and freeze spawns briefly
+    clearSafeCorridorAhead(s);
+    s.spawnFrozenUntil = s.time.now + FAIR.superSpawnFreezeMs;
   }
   function startBlink(s){
     stopBlink(s);
@@ -437,16 +429,17 @@
     s._prevSpeedMult = newMult;
   }
 
+  // ======= Spawns (with fairness) =======
   function createGroundObstacle(s){
     const makeEnemy = Math.random() < GROUND_ENEMY_PROBABILITY;
     if (makeEnemy){
       const e = s.obstacles.create(W + sx(20), GROUND_Y, 'enemyRun', 0).setOrigin(0.5,1).setDepth(4.2);
       e.play('enemy-run');
-      const extra = 28 + s.difficulty * 7; // *** CHANGES: slightly faster
+      const extra = 28 + s.difficulty * 7;
       e.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
       e.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
       e.setData('destructible', true);
-      e.anims.timeScale = animScaleFromSpeed(s) * 0.95; // *** CHANGES
+      e.anims.timeScale = animScaleFromSpeed(s) * 0.95;
       return e;
     } else {
       const c = s.obstacles.create(W + sx(20), GROUND_Y, 'cactusRect').setOrigin(0.5,1).setDepth(4.2);
@@ -459,25 +452,31 @@
   }
 
   function createFlyingObstacle(s){
-    const laneTop = GROUND_Y - sy(0.22 * BASE.H);
-    const laneBot = GROUND_Y - sy(0.12 * BASE.H);
-    const f = s.obstacles.create(W + sx(20), Phaser.Math.Between(laneTop,laneBot), 'ptero0')
-      .setOrigin(0.5,1).setDepth(4.2);
+    // Safer high lanes: ensure enough headroom vs ground route
+    const laneTop = GROUND_Y - sy(0.26 * BASE.H);
+    const laneBot = GROUND_Y - sy(0.16 * BASE.H);
+    let y = Phaser.Math.Between(laneTop,laneBot);
+    // Nudge higher if too low
+    if (GROUND_Y - y < FAIR.flyerMinClearancePx) y = GROUND_Y - FAIR.flyerMinClearancePx;
+
+    const f = s.obstacles.create(W + sx(20), y, 'ptero0').setOrigin(0.5,1).setDepth(4.2);
     f.setDisplaySize(su(48), su(24));
     f.body.setSize(su(48), su(24)).setOffset(0,0);
     f.play('ptero-fly');
 
-    const extra = 48 + s.difficulty * 9; // *** CHANGES: faster flyers
+    const extra = 48 + s.difficulty * 9;
     f.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
     f.setData('destructible', true);
-    f.anims.timeScale = animScaleFromSpeed(s) * 0.95; // *** CHANGES
+    f.anims.timeScale = animScaleFromSpeed(s) * 0.95;
     return f;
   }
 
-  function spawnObstacle(s){
-    // flying gains weight with difficulty (caps at 78%)
-    const flyWeight = Math.min(0.28 + s.difficulty * 0.055, 0.78); // *** CHANGES
-    (Math.random() < flyWeight) ? createFlyingObstacle(s) : createGroundObstacle(s);
+  function spawnObstacleFair(s){
+    // Weighted flyer ratio increases with diff, capped
+    const flyWeight = Math.min(0.28 + s.difficulty * 0.055, 0.78);
+    const created = (Math.random() < flyWeight) ? createFlyingObstacle(s) : createGroundObstacle(s);
+    s.lastSpawnTime = s.time.now;
+    return created;
   }
 
   function spawnCollectible(s){
@@ -487,25 +486,22 @@
     item.body.setSize(su(20), su(20)).setOffset(0,0);
     item.setVelocityX(-(s.worldSpeed * s.speedMult));
     item.setScale(1.1);
-    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 380, repeat: -1 }); // *** CHANGES: quicker pulse
+    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 380, repeat: -1 });
     return item;
   }
 
   function spawnShuriken(s){
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
-    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y,'shuriken');
+    const b = s.shurikens.get(s.player.x + sx(14), s.player.y - sy(38), 'shuriken');
     if (!b) return;
     b.setActive(true).setVisible(true).setOrigin(0.5);
-    b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
+    b.setDisplaySize(su(20), su(20));
     if (!b.body) s.physics.world.enable(b);
     b.body.setAllowGravity(false);
-    b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
-      Math.round((SHURIKEN_DISPLAY - SHURIKEN_BODY)/2),
-      Math.round((SHURIKEN_DISPLAY - SHURIKEN_BODY)/2)
-    );
-    const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 24) * s.speedMult; // *** CHANGES
+    b.body.setSize(su(16), su(16)).setOffset(2,2);
+    const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 24) * s.speedMult;
     b.setVelocityX(speed); b.setDepth(4.3);
-    const spinBase = 3.4, VAR = 1.2; // *** CHANGES: livelier spin
+    const spinBase = 3.4, VAR = 1.2;
     b.rotation = 0;
     b.rotationSpeed = (spinBase + Phaser.Math.FloatBetween(-VAR, VAR)) * Math.PI * 2 * (0.8 + 0.2 * s.speedMult);
     s.time.delayedCall(2200, ()=>{ if (b && b.active) b.destroy(); });
@@ -515,7 +511,7 @@
     if (!s.gameStarted || s.gameOver || s.throwing) return;
     s.throwing = true;
     s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
-    s.time.delayedCall(80, ()=> spawnShuriken(s)); // *** CHANGES: slightly snappier throw
+    s.time.delayedCall(80, ()=> spawnShuriken(s));
     s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
       if (s.gameOver) return;
       s.throwing = false;
@@ -530,11 +526,9 @@
 
     const elapsed = s.time.now - s.startTime;
     const baseDiff = Math.floor(elapsed / DIFF_EVERY_MS);
-    // *** CHANGES: apply session bias
     s.difficulty = Phaser.Math.Clamp(baseDiff + s.skillBias, 0, MAX_DIFF);
 
     s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
-
     const dt = delta / 1000;
     const scroll = s.worldSpeed * s.speedMult;
 
@@ -546,10 +540,9 @@
     s.groundBack.tilePositionX  += (scroll * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (scroll * PARALLAX.groundFront)* dt;
 
-    // *** CHANGES: timeScale for animations follows speed
     applyAnimTimeScales(s);
 
-    // Variable jump
+    // Variable jump (reduced dependency)
     const now = s.time.now;
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
@@ -572,23 +565,39 @@
       if (b.x > W + sx(40)) b.destroy();
     });
 
-    // Spawns
-    if (time > s.nextSpawn) {
-      spawnObstacle(s);
+    // Spawns with fairness: respect safe-freeze and min gap
+    if (time > s.nextSpawn && now >= s.spawnFrozenUntil) {
+      spawnObstacleFair(s);
 
-      // *** CHANGES: quicker level interval and smarter bursts
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
+      const jitter = Phaser.Math.Between(-240, 240);
 
+      // Enforce min gap window (convert gap px to ms based on current scroll)
+      const minGapMs = fairMinGapMs(s, scroll);
+
+      // Optional burst (only if enough room to keep fair)
+      let extraPadMs = 0;
       const burstChance = Math.min(0.20 + s.difficulty * 0.06, 0.70);
       if (Math.random() < burstChance) {
         const delay1 = Phaser.Math.Between(140, 280);
-        s.time.delayedCall(delay1, () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
-        if (Math.random() < (0.30 + s.difficulty * 0.03)) {
-          s.time.delayedCall(delay1 + Phaser.Math.Between(120, 220), () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
+        const afterBurstTime = time + delay1;
+        // Only schedule if it won't violate min gap (using current speed)
+        if (delay1 >= minGapMs * 0.6) {
+          s.time.delayedCall(delay1, () => { if (!s.gameOver && s.gameStarted) spawnObstacleFair(s); });
+          // Possible third
+          if (Math.random() < (0.30 + s.difficulty * 0.03)) {
+            const delay2 = delay1 + Phaser.Math.Between(120, 220);
+            if (delay2 - delay1 >= minGapMs * 0.5) {
+              s.time.delayedCall(delay2, () => { if (!s.gameOver && s.gameStarted) spawnObstacleFair(s); });
+              extraPadMs += msFromPixels(FAIR.postBurstPadPx, scroll);
+            }
+          } else {
+            extraPadMs += msFromPixels(FAIR.postBurstPadPx * 0.6, scroll);
+          }
         }
       }
 
-      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-240, 240);
+      s.nextSpawn = time + Math.max(levelInterval + jitter, minGapMs) + extraPadMs;
     }
 
     if (now > s.nextCollectible) {
@@ -605,74 +614,53 @@
 
   // ======= Flow =======
   function toControls() { hide(splash1); show(splash2); }
-  document.getElementById('splash-1-next').addEventListener('click', toControls);
-  document.getElementById('splash-1').addEventListener('click', (e)=>{ if (e.target === document.getElementById('splash-1')) toControls(); });
-  window.addEventListener('keydown', (e)=>{ if (document.getElementById('splash-1').classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
+  splash1Next.addEventListener('click', toControls);
+  splash1.addEventListener('click', (e)=>{ if (e.target === splash1) toControls(); });
+  window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
 
   function startRun() {
     const s = scene; if (!s) return;
     hide(splash2);
-
-    s.gameOver = false;
-    s.gameStarted = true;
-
-    s.jumpQueuedAt = -Infinity;
-    s.jumpReleased = false;
-    s.lastOnGroundAt = s.time.now;
-
+    s.gameOver = false; s.gameStarted = true;
+    s.jumpQueuedAt = -Infinity; s.jumpReleased = false; s.lastOnGroundAt = s.time.now;
     s.physics.world.resume();
-    s.player.anims.play('base-run', true);
-    s.player.anims.resume();
-    s.dust.start(); // *** CHANGES: dust starts with run
-
-    s.startTime = s.time.now;
-    s.nextSpawn = 0;
+    s.player.anims.play('base-run', true); s.player.anims.resume();
+    s.dust.start();
+    s.startTime = s.time.now; s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
+    s.spawnFrozenUntil = 0;
   }
-  document.getElementById('start-cta').addEventListener('click', startRun);
-  document.getElementById('splash-2').addEventListener('click', (e)=>{ if (e.target === document.getElementById('splash-2')) startRun(); });
-  window.addEventListener('keydown', (e)=>{ if (document.getElementById('splash-2').classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
+  startCTA.addEventListener('click', startRun);
+  splash2.addEventListener('click', (e)=>{ if (e.target === splash2) startRun(); });
+  window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
 
   function restartRun() {
     const s = scene; if (!s) return;
     hide(gameover);
-
     try { s.tweens.killAll(); } catch {}
     try { s.time.removeAllEvents(); } catch {}
-
     s.obstacles.clear(true, true);
     s.collectibles.clear(true, true);
     s.shurikens.clear(true, true);
-
-    s.player.body.enable = true;
-    s.player.setActive(true).setVisible(true);
-    s.player.setPosition(sx(220), GROUND_Y);
-    s.player.setVelocity(0, 0);
+    s.player.body.enable = true; s.player.setActive(true).setVisible(true);
+    s.player.setPosition(sx(220), GROUND_Y); s.player.setVelocity(0, 0);
     s.player.setAlpha(1).clearTint();
-
-    s.throwing = false;
-    if (s.arms) { s.arms.setVisible(false); s.arms.anims?.stop(); }
-
+    s.throwing = false; if (s.arms) { s.arms.setVisible(false); s.arms.anims?.stop(); }
     s.invincible = false; s.speedMult = 1.0; s._prevSpeedMult = 1.0;
     s.score = 0; s.scoreText.setText('SCORE 0');
     s.difficulty = 0; s.worldSpeed = SPEED;
-    s.startTime = s.time.now;
-    s.nextSpawn = 0; s.nextCollectible = s.time.now + collectibleInterval();
+    s.startTime = s.time.now; s.nextSpawn = 0; s.nextCollectible = s.time.now + collectibleInterval();
     s.gameOver = false; s.gameStarted = true;
     if (s._obstacleCollider) s._obstacleCollider.active = true;
-
-    s.jumpQueuedAt = -Infinity;
-    s.jumpReleased = false;
-    s.lastOnGroundAt = s.time.now;
-
+    s.jumpQueuedAt = -Infinity; s.jumpReleased = false; s.lastOnGroundAt = s.time.now;
     s.physics.world.resume();
-    s.player.anims.play('base-run', true);
-    s.player.anims.resume();
-    s.dust.start(); // *** CHANGES
+    s.player.anims.play('base-run', true); s.player.anims.resume();
+    s.dust.start();
+    s.spawnFrozenUntil = 0;
   }
-  document.getElementById('restart-cta').addEventListener('click', restartRun);
-  document.getElementById('gameover').addEventListener('click', (e)=>{ if (e.target === document.getElementById('gameover')) restartRun(); });
-  window.addEventListener('keydown', (e)=>{ if (document.getElementById('gameover').classList.contains('show') && e.code === 'Space') restartRun(); });
+  restartCTA.addEventListener('click', restartRun);
+  gameover.addEventListener('click', (e)=>{ if (e.target === gameover) restartRun(); });
+  window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartRun(); });
 
   // ======= Fullscreen =======
   async function lockLandscape() { try { await screen.orientation?.lock?.('landscape'); } catch {} }
@@ -680,31 +668,23 @@
     try {
       if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
       else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
-      await lockLandscape();
-      outer.classList.add('fs');
-      game.scale.refresh();
-    } catch {
-      outer.classList.add('fs');
-      window.scrollTo(0,1);
-      game.scale.refresh();
-    }
+      await lockLandscape(); outer.classList.add('fs'); game.scale.refresh();
+    } catch { outer.classList.add('fs'); window.scrollTo(0,1); game.scale.refresh(); }
   }
   async function exitFullscreen() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (document.webkitFullscreenElement) document.webkitExitFullscreen?.();
     } catch {}
-    outer.classList.remove('fs');
-    game.scale.refresh();
+    outer.classList.remove('fs'); game.scale.refresh();
   }
-  document.getElementById('fs-btn').addEventListener('click', async () => {
+  fsBtn.addEventListener('click', async () => {
     if (!document.fullscreenElement && !document.webkitFullscreenElement) await enterFullscreen();
     else await exitFullscreen();
   });
   document.addEventListener('fullscreenchange', () => {
     const fs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
-    outer.classList.toggle('fs', fs);
-    game.scale.refresh();
+    outer.classList.toggle('fs', fs); game.scale.refresh();
   });
 
   // ======= Rotate/UX =======
