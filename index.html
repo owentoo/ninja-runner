@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Harder Ramp + Touch Jumps</title>
+  <title>Ninja Runner — Mobile Fixes + Effects</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -138,30 +138,30 @@
   const GROUND_RATIO = 0.833;
   const GROUND_Y = Math.round(H * GROUND_RATIO);
 
-  // ======= GAME CONSTANTS (tougher ramp, same jump forgiveness) =======
+  // ======= GAME CONSTANTS =======
   const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
 
   // Spawn pacing / ramp
-  const OBSTACLE_BASE_INTERVAL = 980;         // faster base spawn
-  const MAX_DIFF = 12;                        // more steps of difficulty
-  const DIFF_EVERY_MS = 8000;                 // difficulty increases every 8s
-  const SPEED_STEP = 34;                      // world speed rises faster
-  const INTERVAL_FACTOR = 0.88;               // interval shrinks quicker
+  const OBSTACLE_BASE_INTERVAL = 980;
+  const MAX_DIFF = 12;
+  const DIFF_EVERY_MS = 8000;
+  const SPEED_STEP = 34;
+  const INTERVAL_FACTOR = 0.88;
 
   // Combat / mix
   const SHURIKEN_SPEED_BASE = 650;
-  const GROUND_ENEMY_PROBABILITY = 0.45;      // base; flying increases with diff
+  const GROUND_ENEMY_PROBABILITY = 0.45;
 
   // Parallax
   const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
 
-  // Jump forgiveness unchanged per request
+  // Jump forgiveness & variable height
   const COYOTE_TIME_MS = 120, JUMP_BUFFER_MS = 120, JUMP_CUTOFF_FACTOR = 0.5;
 
   const SHURIKEN_DISPLAY = su(20), SHURIKEN_BODY = su(16);
   const THROW_OFFSET = { x: sx(14), y: -sy(38) };
 
-  // Powerups: rarer & shorter (same speed burst)
+  // Powerups
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
   const COLLECTIBLE_BASE_INTERVAL = 13500, COLLECTIBLE_INTERVAL_JITTER = 4500;
 
@@ -184,7 +184,7 @@
 
   // ======= Phaser (single instance) =======
   let game;
-  let scene; // cached reference after boot
+  let scene; // cached after boot
 
   game = new Phaser.Game({
     type: Phaser.CANVAS,
@@ -245,6 +245,9 @@
   function create(){
     const s=this; scene = s; ensureBGAndGroundTextures(s);
 
+    // Allow robust multi-touch (so you can hold jump and tap throw)
+    s.input.addPointer(3); // add extra pointers beyond default
+
     // State
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
@@ -263,7 +266,7 @@
 
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W, sy(4)).refreshBody();
 
-    // Player start moved +100px right (from sx(120) to sx(220))
+    // Player
     s.player = s.physics.add.sprite(sx(220), GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
     s.player.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
     s.physics.add.collider(s.player, floor);
@@ -280,7 +283,7 @@
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
-    // Particle trail (managed in update; never during super or in-air)
+    // Particle trail (never during super or in-air)
     s.trailParticles = s.add.particles(0, 0, 'px', {
       lifespan: 220, speed: 0, quantity: 1, frequency: 22,
       scale: { start: 1.1, end: 0 }, alpha: { start: 0.65, end: 0 },
@@ -303,14 +306,19 @@
 
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
+
+      // Use pointer.x relative to the game canvas; Phaser sets both worldX/x consistently in FIT mode
       const isLeft = pointer.worldX < (W * 0.5);
+
       if (isLeft) {
+        // Start/hold jump (variable height)
         s.touchJumpPointerId = pointer.id;
         s.touchWasLeftHalf = true;
         s.jumpHeldByTouch = true;
-        s.jumpQueuedAt = s.time.now;
-        s.jumpReleased = false;
+        s.jumpQueuedAt = s.time.now;   // buffer the jump like desktop
+        s.jumpReleased = false;        // keep rising while held
       } else {
+        // Allow throw even while holding the left jump pointer (multi-touch)
         doThrow(s);
       }
     });
@@ -318,6 +326,7 @@
     s.input.on('pointerup', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
+        // Variable height cutoff: releasing early trims the arc
         s.jumpReleased = true;
         s.jumpHeldByTouch = false;
         s.touchWasLeftHalf = false;
@@ -325,6 +334,7 @@
       }
     });
 
+    // Keyboard parity with mobile
     s.input.keyboard.on('keydown-UP',    ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{
       if (!s.gameStarted && !s.gameOver && splash2.classList.contains('show')) { startRun(); return; }
@@ -358,6 +368,9 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
+    // Track landings for super-land thud shake (visual only)
+    s.wasOnGround = s.player.body.blocked.down;
+
     // Start paused under overlays
     s.physics.world.pause();
   }
@@ -390,10 +403,11 @@
     show(gameover);
   }
 
-  // White flash when phasing through an obstacle (invincible overlap)
+  // Flash + tiny shake when phasing through obstacle (invincible overlap)
   function zapObstacle(s,o){ 
     if (!o || !o.active) return; 
-    s.cameras.main.flash(90,255,255,255); // <-- quick white flash
+    s.cameras.main.flash(90,255,255,255); // white flash
+    s.cameras.main.shake(90, 0.01);       // subtle shake on pass-through
     o.setTint(0x99fffd); 
     s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); 
     s.score += 2; 
@@ -406,15 +420,13 @@
       stopBlink(s);
       s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
-      // Ensure NO particles during super:
-      if (s.trailParticles) s.trailParticles.stop();
+      if (s.trailParticles) s.trailParticles.stop(); // no particles during super
       if (s._obstacleCollider) s._obstacleCollider.active = false;
       return;
     }
     s.invincible = true; s.speedMult=POWERUP_SPEED_MULT; s.player.setTint(0x8ef1ff);
     s.superBanner.setVisible(true);
-    // Ensure NO particles during super:
-    if (s.trailParticles) s.trailParticles.stop();
+    if (s.trailParticles) s.trailParticles.stop(); // no particles during super
     if (s._obstacleCollider) s._obstacleCollider.active = false;
     rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
     s._powerupTimer = s.time.delayedCall(POWERUP_DURATION_MS, ()=>deactivatePowerUp(s));
@@ -423,7 +435,7 @@
   function deactivatePowerUp(s){
     s.invincible=false; s.speedMult=1.0; s.player.clearTint();
     s.superBanner.setVisible(false); 
-    if (s.trailParticles) s.trailParticles.stop(); // keep off until update says otherwise
+    if (s.trailParticles) s.trailParticles.stop(); // will re-enable on ground
     if (s._obstacleCollider) s._obstacleCollider.active = true;
     if (s._powerupTimer) s._powerupTimer.remove(false);
     if (s._warnTimer) s._warnTimer.remove(false);
@@ -530,6 +542,7 @@
   }
 
   function doThrow(s){
+    // Prevent arm animation overlap, but still allow throws while holding jump
     if (!s.gameStarted || s.gameOver || s.throwing) return;
     s.throwing = true;
     s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
@@ -561,7 +574,11 @@
 
     const now = s.time.now;
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
+
+    // ===== Jump handling parity (desktop/mobile) =====
+    // Buffer: keep the most recent jump intent so it can fire on landing/coyote
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
+
     const canCoyote = (now - s.lastOnGroundAt) <= COYOTE_TIME_MS;
     const hasBuffered = (now - s.jumpQueuedAt) <= JUMP_BUFFER_MS;
 
@@ -569,29 +586,37 @@
       s.player.setVelocityY(JUMP_VELOCITY);
       s.jumpQueuedAt = -Infinity;
     }
+    // Variable height cutoff: release (keyboard or touch) trims ascent
     if (s.jumpReleased && s.player.body.velocity.y < 0) {
       s.player.setVelocityY(s.player.body.velocity.y * JUMP_CUTOFF_FACTOR);
       s.jumpReleased = false;
     }
 
-    // Manage trail visibility: ON only when grounded AND not in super
+    // Trail ON only when grounded and not in super
     if (s.trailParticles){
       const wantTrail = s.player.body.blocked.down && !s.invincible && s.gameStarted && !s.gameOver;
       if (wantTrail && !s.trailParticles.on) s.trailParticles.start();
       else if (!wantTrail && s.trailParticles.on) s.trailParticles.stop();
     }
 
+    // Super landing shake: detect transition air -> ground
+    const nowOnGround = s.player.body.blocked.down;
+    if (!s.wasOnGround && nowOnGround && s.invincible) {
+      s.cameras.main.shake(90, 0.01);
+    }
+    s.wasOnGround = nowOnGround;
+
+    // Shuriken spin / cleanup
     s.shurikens.children.each(b => {
       if (!b.active) return;
       b.rotation += (b.rotationSpeed||0) * dt;
       if (b.x > W + sx(40)) b.destroy();
     });
 
+    // Spawns
     if (time > s.nextSpawn) {
       spawnObstacle(s);
-
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
-
       const burstChance = Math.min(0.15 + s.difficulty * 0.06, 0.65);
       if (Math.random() < burstChance) {
         const delay = Phaser.Math.Between(160, 320);
@@ -600,7 +625,6 @@
           s.time.delayedCall(delay + Phaser.Math.Between(140, 240), () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
         }
       }
-
       s.nextSpawn = time + levelInterval + Phaser.Math.Between(-260, 260);
     }
 
@@ -609,13 +633,14 @@
       s.nextCollectible = now + collectibleInterval();
     }
 
+    // Cleanup + score
     s.obstacles.children.each(o => { if (o.active && o.x < -sx(40)) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
     s.collectibles.children.each(c => { if (c.active && c.x < -sx(40)) c.destroy(); });
 
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= Flow (full-panel overlays) =======
+  // ======= Flow (overlays) =======
   function toControls() { hide(splash1); show(splash2); }
   splash1Next.addEventListener('click', toControls);
   splash1.addEventListener('click', (e)=>{ if (e.target === splash1) toControls(); });
@@ -675,6 +700,7 @@
     s.jumpQueuedAt = -Infinity;
     s.jumpReleased = false;
     s.lastOnGroundAt = s.time.now;
+    s.wasOnGround = s.player.body.blocked.down;
 
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
@@ -735,7 +761,7 @@
   window.addEventListener('pageshow', updateUX);
 
   // ======= Boot UX =======
-  updateUX();
+  updateUX(); // Splash 1 shows by default; progresses to Splash 2 then Start
 })();
 </script>
 </body>
