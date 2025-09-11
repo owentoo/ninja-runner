@@ -1,24 +1,19 @@
-
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Harder Ramp + Touch Jumps</title>
+  <title>Ninja Runner — Faster Pace + Adaptive Ramp</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <style>
     html, body { height: 100%; margin: 0; background: #d9d9d9; }
-
     #game-outer {
       position: relative;
       width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
-      overflow: hidden;
-      background: transparent;
+      overflow: hidden; background: transparent;
     }
-
-    /* Stage (Phaser parent) – cap desktop width to 1100; gray shows bounds */
     #stage {
       position: relative;
       width: min(100%, 1100px);
@@ -29,52 +24,17 @@
       box-shadow: inset 0 0 0 2px #b5b5b5;
       border-radius: 6px;
     }
-
-    /* Fullscreen */
-    #game-outer.fs #stage {
-      width: 100svw; height: 100svh; aspect-ratio: auto;
-      border-radius: 0; box-shadow: none;
-    }
-
+    #game-outer.fs #stage { width: 100svw; height: 100svh; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
     canvas { display: block; }
-
-    /* Full-panel overlays that cover the whole stage and block input */
-    .overlay {
-      position: absolute; inset: 0;
-      display: none; align-items: center; justify-content: center;
-      z-index: 10; text-align: center;
-      background: rgba(0,0,0,.60);
-      backdrop-filter: blur(4px);
-      pointer-events: auto;
-    }
+    .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 10; text-align: center; background: rgba(0,0,0,.60); backdrop-filter: blur(4px); pointer-events: auto; }
     .overlay.show { display: flex; }
-    .sheet {
-      max-width: 560px; padding: 18px 16px; border-radius: 14px;
-      background: rgba(0,0,0,.78); color: #fff;
-      border: 1px solid rgba(255,255,255,.18);
-      font: 600 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto;
-    }
+    .sheet { max-width: 560px; padding: 18px 16px; border-radius: 14px; background: rgba(0,0,0,.78); color: #fff; border: 1px solid rgba(255,255,255,.18); font: 600 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto; }
     .sheet h2 { margin: 0 0 8px; font-size: 20px; }
     .sheet p { margin: 8px 0; font-weight: 500; }
-    .cta {
-      margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 12px;
-      font: 600 14px/1 system-ui, -apple-system, Segoe UI, Roboto;
-      background: #00b894; color: #0b1b16; cursor: pointer;
-    }
-
-    /* FS button */
-    #fs-btn {
-      position: absolute; right: 10px; top: 10px; z-index: 11;
-      padding: 8px 10px; border: 0; border-radius: 12px;
-      font: 12px/1 system-ui, -apple-system, Segoe UI, Roboto;
-      background: #000; color: #fff; opacity: .95; cursor: pointer;
-      display: none; touch-action: manipulation;
-    }
+    .cta { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 12px; font: 600 14px/1 system-ui, -apple-system, Segoe UI, Roboto; background: #00b894; color: #0b1b16; cursor: pointer; }
+    #fs-btn { position: absolute; right: 10px; top: 10px; z-index: 11; padding: 8px 10px; border: 0; border-radius: 12px; font: 12px/1 system-ui, -apple-system, Segoe UI, Roboto; background: #000; color: #fff; opacity: .95; cursor: pointer; display: none; touch-action: manipulation; }
     #fs-btn.show { display: inline-block; }
-
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
-
-    /* Rotate notice (full-coverage) */
     #rotate-overlay .sheet { background: rgba(0,0,0,.85); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
@@ -139,32 +99,41 @@
   const GROUND_RATIO = 0.833;
   const GROUND_Y = Math.round(H * GROUND_RATIO);
 
-  // ======= GAME CONSTANTS (tougher ramp, same jump forgiveness) =======
-  const SPEED = 300, GRAVITY = 1400, JUMP_VELOCITY = -520;
+  // ======= SESSION-LEVEL ADAPTIVE MEMORY (persists across restarts) =======
+  // *** CHANGES: simple adaptive knob that nudges difficulty next run.
+  let sessionSkill = 0; // -2..+3 range, increases with long survival, decreases with quick deaths.
+
+  // ======= GAME CONSTANTS (faster baseline + steeper ramp) =======
+  const SPEED = 320;                         // *** CHANGES: up from 300 for snappier baseline
+  const GRAVITY = 1500;                      // *** CHANGES: slightly higher for crisp jumps
+  const JUMP_VELOCITY = -540;                // *** CHANGES: match gravity so max jump stays similar
 
   // Spawn pacing / ramp
-  const OBSTACLE_BASE_INTERVAL = 980;         // faster base spawn
-  const MAX_DIFF = 12;                        // more steps of difficulty
-  const DIFF_EVERY_MS = 8000;                 // difficulty increases every 8s
-  const SPEED_STEP = 34;                      // world speed rises faster
-  const INTERVAL_FACTOR = 0.88;               // interval shrinks quicker
+  const OBSTACLE_BASE_INTERVAL = 920;        // *** CHANGES: spawn a bit faster at start
+  const MAX_DIFF = 12;
+  const DIFF_EVERY_MS = 7800;                // *** CHANGES: ramp a hair quicker
+  const SPEED_STEP = 36;                     // *** CHANGES: higher step for speed curve
+  const INTERVAL_FACTOR = 0.86;              // *** CHANGES: interval shrinks faster per diff
 
   // Combat / mix
-  const SHURIKEN_SPEED_BASE = 650;
-  const GROUND_ENEMY_PROBABILITY = 0.45;      // base; flying increases with diff
+  const SHURIKEN_SPEED_BASE = 700;           // *** CHANGES: projectiles feel faster
+  const GROUND_ENEMY_PROBABILITY = 0.45;
 
-  // Parallax
-  const PARALLAX = { clouds:0.20, mountains:0.35, hills:0.55, groundBack:0.95, groundFront:1.15 };
+  // Parallax (slightly stronger forward layers for speed feel)
+  const PARALLAX = {
+    clouds:0.22, mountains:0.38, hills:0.60,
+    groundBack:1.08, groundFront:1.26       // *** CHANGES
+  };
 
-  // Jump forgiveness unchanged per request
+  // Jump forgiveness unchanged
   const COYOTE_TIME_MS = 120, JUMP_BUFFER_MS = 120, JUMP_CUTOFF_FACTOR = 0.5;
 
   const SHURIKEN_DISPLAY = su(20), SHURIKEN_BODY = su(16);
   const THROW_OFFSET = { x: sx(14), y: -sy(38) };
 
-  // Powerups: rarer & shorter (same speed burst)
+  // Powerups
   const POWERUP_SPEED_MULT = 5.0, POWERUP_DURATION_MS = 4000, POWERUP_WARN_MS = 900;
-  const COLLECTIBLE_BASE_INTERVAL = 13500, COLLECTIBLE_INTERVAL_JITTER = 4500;
+  const COLLECTIBLE_BASE_INTERVAL = 12800, COLLECTIBLE_INTERVAL_JITTER = 4200; // *** CHANGES: a bit more frequent
 
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
@@ -183,9 +152,8 @@
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
 
-  // ======= Phaser (single instance) =======
-  let game;
-  let scene; // cached reference after boot
+  // ======= Phaser =======
+  let game, scene;
 
   game = new Phaser.Game({
     type: Phaser.CANVAS,
@@ -202,7 +170,6 @@
     scene: { preload, create, update }
   });
 
-  // ======= Helper for overlays =======
   const show = (el) => el.classList.add('show');
   const hide = (el) => el.classList.remove('show');
 
@@ -214,7 +181,6 @@
 
   function preload(){
     solid(this,'px',2,2,0x000000);
-    // If these assets don't exist in your folder, comment them out; placeholders are generated below.
     this.load.image('bgClouds','bg_clouds.png');
     this.load.image('bgMountains','bg_mountains.png');
     this.load.image('bgHills','bg_hills.png');
@@ -224,7 +190,6 @@
     this.load.spritesheet('enemyRun','ninja_run_enemy.png',{frameWidth:48,frameHeight:55});
     this.load.image('shuriken','shuriken.png');
     this.load.image('superBanner','super.png');
-
     for (let i=0;i<2;i++) solid(this,'arms'+i,48,48,0xff8a8a);
     for (let i=0;i<2;i++) solid(this,'armsThrow'+i,48,48,0xff5252);
     solid(this,'cactusRect',16,26,0x000000);
@@ -251,6 +216,9 @@
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
 
+    // *** CHANGES: carry adaptive difficulty from previous run
+    s.skillBias = Phaser.Math.Clamp(sessionSkill, -2, 3);
+
     // Layers
     s.bgClouds    = s.add.tileSprite(0, Math.round(H*0.10), W*2, Math.round(H*0.135),'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, Math.round(H*0.152),W*2, Math.round(H*0.152),'bgMountains').setOrigin(0,0).setDepth(1);
@@ -264,7 +232,7 @@
 
     const floor = s.physics.add.staticImage(W/2, GROUND_Y+1, 'px').setDisplaySize(W, sy(4)).refreshBody();
 
-    // Player start moved +100px right (from sx(120) to sx(220))
+    // Player
     s.player = s.physics.add.sprite(sx(220), GROUND_Y, 'ninjaRun', 0).setOrigin(0.5,1).setCollideWorldBounds(true);
     s.player.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
     s.physics.add.collider(s.player, floor);
@@ -277,6 +245,14 @@
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
 
     s.player.play('base-run'); s.player.anims.pause();
+
+    // *** CHANGES: dust trail (always on, subtle); uses 'px' texture, no new files
+    s.dust = s.add.particles(0,0,'px', {
+      lifespan: 260, speed: {min:10,max:40}, angle: {min:200,max:260},
+      scale: { start: 0.8, end: 0 }, alpha: { start: 0.25, end: 0 },
+      quantity: 1, frequency: 40, tint: 0x000000, follow: s.player, followOffset: { x: -18, y: -8 },
+      blendMode: 'MULTIPLY'
+    }); s.dust.stop(); // only starts when run begins
 
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
@@ -295,7 +271,7 @@
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
 
-    // --- Mobile jump: short tap = short hop; long press = higher jump ---
+    // Touch jumps
     s.touchJumpPointerId = null;
     s.jumpHeldByTouch = false;
     s.touchWasLeftHalf = false;
@@ -304,21 +280,19 @@
       if (!s.gameStarted || s.gameOver) return;
       const isLeft = pointer.worldX < (W * 0.5);
       if (isLeft) {
-        // begin jump intent (hold until pointerup)
         s.touchJumpPointerId = pointer.id;
         s.touchWasLeftHalf = true;
         s.jumpHeldByTouch = true;
-        s.jumpQueuedAt = s.time.now;   // use existing buffer
-        s.jumpReleased = false;        // allow full jump while held
+        s.jumpQueuedAt = s.time.now;
+        s.jumpReleased = false;
       } else {
         doThrow(s);
       }
     });
-
     s.input.on('pointerup', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
       if (pointer.id === s.touchJumpPointerId && s.touchWasLeftHalf) {
-        s.jumpReleased = true;         // triggers variable height cutoff
+        s.jumpReleased = true;
         s.jumpHeldByTouch = false;
         s.touchWasLeftHalf = false;
         s.touchJumpPointerId = null;
@@ -348,6 +322,8 @@
       b.destroy();
       if (o.getData('destructible')) {
         o.setData('hit', true); o.setTint(0xffff66);
+        // *** CHANGES: subtle impact shake
+        s.cameras.main.shake(60, 0.002);
         s.time.delayedCall(60, ()=>{ if (o.active) o.destroy(); s.score += (3 + s.difficulty * 0.5); });
       }
     });
@@ -364,16 +340,28 @@
 
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
 
+  // ======= Helpers for pacing/feel =======
+  function animScaleFromSpeed(s){
+    // *** CHANGES: scale animation time with world speed (feels faster)
+    const r = (s.worldSpeed * s.speedMult) / SPEED;
+    return Phaser.Math.Clamp(r, 1.0, 2.6);
+  }
+  function applyAnimTimeScales(s){
+    const ts = animScaleFromSpeed(s);
+    if (s.player?.anims) s.player.anims.timeScale = ts;
+    s.obstacles.children.each(o=>{
+      if (o.anims) o.anims.timeScale = ts * 0.95; // enemies a hair slower visually
+    });
+  }
+
   // ======= End / Powerups / Helpers =======
   function endGame(s){
     if (s.gameOver) return;
     s.gameOver = true;
 
-    // Stop any in-flight effects/timers to prevent late flashes
     try { s.tweens.killAll(); } catch {}
     try { s.time.removeAllEvents(); } catch {}
 
-    // Stop throw/arms so restart isn't blocked
     s.throwing = false;
     if (s.arms) { s.arms.setVisible(false); s.arms.anims?.stop(); }
 
@@ -388,6 +376,11 @@
     s.player.clearTint();
     s.invincible=false; s.speedMult=1.0;
 
+    // *** CHANGES: update sessionSkill based on survival length
+    const survived = (s.time.now - s.startTime) / 1000;
+    if (survived >= 50) sessionSkill = Math.min(3, sessionSkill + 1);
+    else if (survived <= 10) sessionSkill = Math.max(-2, sessionSkill - 1);
+
     finalScoreEl.textContent = Math.floor(s.score);
     show(gameover);
   }
@@ -395,6 +388,8 @@
   function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
 
   function activatePowerUp(s){
+    // *** CHANGES: micro camera shake to sell speed
+    s.cameras.main.shake(180, 0.004);
     if (s.invincible){
       if (s._powerupTimer) s._powerupTimer.remove(false);
       if (s._warnTimer) s._warnTimer.remove(false);
@@ -403,6 +398,7 @@
       s._warnTimer    = s.time.delayedCall(Math.max(0, POWERUP_DURATION_MS - POWERUP_WARN_MS), ()=>startBlink(s));
       if (s.trailParticles) s.trailParticles.start();
       if (s._obstacleCollider) s._obstacleCollider.active = false;
+      applyAnimTimeScales(s); // keep sync
       return;
     }
     s.invincible = true; s.speedMult=POWERUP_SPEED_MULT; s.player.setTint(0x8ef1ff);
@@ -420,6 +416,7 @@
     if (s._warnTimer) s._warnTimer.remove(false);
     stopBlink(s);
     rescaleMoversForSpeedChange(s,s._prevSpeedMult,s.speedMult);
+    applyAnimTimeScales(s);
   }
   function startBlink(s){
     stopBlink(s);
@@ -445,11 +442,11 @@
     if (makeEnemy){
       const e = s.obstacles.create(W + sx(20), GROUND_Y, 'enemyRun', 0).setOrigin(0.5,1).setDepth(4.2);
       e.play('enemy-run');
-      // slightly faster; scales with difficulty
-      const extra = 20 + s.difficulty * 6;
+      const extra = 28 + s.difficulty * 7; // *** CHANGES: slightly faster
       e.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
       e.body.setSize(su(36), su(50)).setOffset(su(6), su(5));
       e.setData('destructible', true);
+      e.anims.timeScale = animScaleFromSpeed(s) * 0.95; // *** CHANGES
       return e;
     } else {
       const c = s.obstacles.create(W + sx(20), GROUND_Y, 'cactusRect').setOrigin(0.5,1).setDepth(4.2);
@@ -462,7 +459,6 @@
   }
 
   function createFlyingObstacle(s){
-    // higher lanes & wider spread at higher difficulty
     const laneTop = GROUND_Y - sy(0.22 * BASE.H);
     const laneBot = GROUND_Y - sy(0.12 * BASE.H);
     const f = s.obstacles.create(W + sx(20), Phaser.Math.Between(laneTop,laneBot), 'ptero0')
@@ -471,16 +467,16 @@
     f.body.setSize(su(48), su(24)).setOffset(0,0);
     f.play('ptero-fly');
 
-    // faster than ground, scales with difficulty
-    const extra = 40 + s.difficulty * 8;
+    const extra = 48 + s.difficulty * 9; // *** CHANGES: faster flyers
     f.setVelocityX(-(s.worldSpeed + extra) * s.speedMult);
     f.setData('destructible', true);
+    f.anims.timeScale = animScaleFromSpeed(s) * 0.95; // *** CHANGES
     return f;
   }
 
   function spawnObstacle(s){
-    // flying gains weight with difficulty (caps at 75%)
-    const flyWeight = Math.min(0.25 + s.difficulty * 0.05, 0.75);
+    // flying gains weight with difficulty (caps at 78%)
+    const flyWeight = Math.min(0.28 + s.difficulty * 0.055, 0.78); // *** CHANGES
     (Math.random() < flyWeight) ? createFlyingObstacle(s) : createGroundObstacle(s);
   }
 
@@ -491,45 +487,35 @@
     item.body.setSize(su(20), su(20)).setOffset(0,0);
     item.setVelocityX(-(s.worldSpeed * s.speedMult));
     item.setScale(1.1);
-    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 400, repeat: -1 });
+    s.tweens.add({ targets: item, scale: 1.0, yoyo: true, duration: 380, repeat: -1 }); // *** CHANGES: quicker pulse
     return item;
   }
 
   function spawnShuriken(s){
     if (s.shurikens.countActive(true) >= s.shurikens.maxSize) return;
-
-    const b = s.shurikens.get(
-      s.player.x + THROW_OFFSET.x,
-      s.player.y + THROW_OFFSET.y,
-      'shuriken'
-    );
+    const b = s.shurikens.get(s.player.x + THROW_OFFSET.x, s.player.y + THROW_OFFSET.y,'shuriken');
     if (!b) return;
-
     b.setActive(true).setVisible(true).setOrigin(0.5);
     b.setDisplaySize(SHURIKEN_DISPLAY, SHURIKEN_DISPLAY);
-
     if (!b.body) s.physics.world.enable(b);
     b.body.setAllowGravity(false);
     b.body.setSize(SHURIKEN_BODY, SHURIKEN_BODY).setOffset(
       Math.round((SHURIKEN_DISPLAY - SHURIKEN_BODY)/2),
       Math.round((SHURIKEN_DISPLAY - SHURIKEN_BODY)/2)
     );
-
-    const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 20) * s.speedMult;
+    const speed = (SHURIKEN_SPEED_BASE + s.difficulty * 24) * s.speedMult; // *** CHANGES
     b.setVelocityX(speed); b.setDepth(4.3);
-
-    const SPIN = 3.0, VAR = 1.0;
+    const spinBase = 3.4, VAR = 1.2; // *** CHANGES: livelier spin
     b.rotation = 0;
-    b.rotationSpeed = (SPIN + Phaser.Math.FloatBetween(-VAR, VAR)) * Math.PI * 2;
-
-    s.time.delayedCall(2500, ()=>{ if (b && b.active) b.destroy(); });
+    b.rotationSpeed = (spinBase + Phaser.Math.FloatBetween(-VAR, VAR)) * Math.PI * 2 * (0.8 + 0.2 * s.speedMult);
+    s.time.delayedCall(2200, ()=>{ if (b && b.active) b.destroy(); });
   }
 
   function doThrow(s){
     if (!s.gameStarted || s.gameOver || s.throwing) return;
     s.throwing = true;
     s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
-    s.time.delayedCall(90, ()=> spawnShuriken(s));
+    s.time.delayedCall(80, ()=> spawnShuriken(s)); // *** CHANGES: slightly snappier throw
     s.arms.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
       if (s.gameOver) return;
       s.throwing = false;
@@ -543,18 +529,27 @@
     if (!s.gameStarted || s.gameOver) return;
 
     const elapsed = s.time.now - s.startTime;
-    s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
-    s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
-    const dt = delta / 1000;
+    const baseDiff = Math.floor(elapsed / DIFF_EVERY_MS);
+    // *** CHANGES: apply session bias
+    s.difficulty = Phaser.Math.Clamp(baseDiff + s.skillBias, 0, MAX_DIFF);
 
+    s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
+
+    const dt = delta / 1000;
     const scroll = s.worldSpeed * s.speedMult;
+
+    // Parallax
     s.bgClouds.tilePositionX    += (scroll * PARALLAX.clouds)     * dt;
     s.bgMountains.tilePositionX += (scroll * PARALLAX.mountains)  * dt;
     s.bgHills.tilePositionX     += (scroll * PARALLAX.hills)      * dt;
-    if (s.superBanner.visible)   s.superBanner.tilePositionX      += (scroll * 0.90) * dt;
+    if (s.superBanner.visible)   s.superBanner.tilePositionX      += (scroll * 0.92) * dt;
     s.groundBack.tilePositionX  += (scroll * PARALLAX.groundBack) * dt;
     s.groundFront.tilePositionX += (scroll * PARALLAX.groundFront)* dt;
 
+    // *** CHANGES: timeScale for animations follows speed
+    applyAnimTimeScales(s);
+
+    // Variable jump
     const now = s.time.now;
     if (s.player.body.blocked.down) s.lastOnGroundAt = now;
     if ((s.cursors.up.isDown || s.cursors.space.isDown) && (now - s.jumpQueuedAt) > 20) s.jumpQueuedAt = now;
@@ -570,30 +565,30 @@
       s.jumpReleased = false;
     }
 
+    // Shuriken housekeeping
     s.shurikens.children.each(b => {
       if (!b.active) return;
       b.rotation += (b.rotationSpeed||0) * dt;
       if (b.x > W + sx(40)) b.destroy();
     });
 
+    // Spawns
     if (time > s.nextSpawn) {
-      // spawn one immediately
       spawnObstacle(s);
 
-      // base interval that shrinks with difficulty
+      // *** CHANGES: quicker level interval and smarter bursts
       const levelInterval = OBSTACLE_BASE_INTERVAL * Math.pow(INTERVAL_FACTOR, s.difficulty);
 
-      // Burst patterns: chance for quick follow-ups (double / triple)
-      const burstChance = Math.min(0.15 + s.difficulty * 0.06, 0.65); // up to 65%
+      const burstChance = Math.min(0.20 + s.difficulty * 0.06, 0.70);
       if (Math.random() < burstChance) {
-        const delay = Phaser.Math.Between(160, 320);
-        s.time.delayedCall(delay, () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
-        if (Math.random() < 0.25 && s.difficulty >= 6) {
-          s.time.delayedCall(delay + Phaser.Math.Between(140, 240), () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
+        const delay1 = Phaser.Math.Between(140, 280);
+        s.time.delayedCall(delay1, () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
+        if (Math.random() < (0.30 + s.difficulty * 0.03)) {
+          s.time.delayedCall(delay1 + Phaser.Math.Between(120, 220), () => { if (!s.gameOver && s.gameStarted) spawnObstacle(s); });
         }
       }
 
-      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-260, 260);
+      s.nextSpawn = time + levelInterval + Phaser.Math.Between(-240, 240);
     }
 
     if (now > s.nextCollectible) {
@@ -601,17 +596,18 @@
       s.nextCollectible = now + collectibleInterval();
     }
 
-    s.obstacles.children.each(o => { if (o.active && o.x < -sx(40)) { o.destroy(); s.score += (1 + s.difficulty * 0.1); } });
+    // Cleanup + scoring
+    s.obstacles.children.each(o => { if (o.active && o.x < -sx(40)) { o.destroy(); s.score += (1 + s.difficulty * 0.12); } });
     s.collectibles.children.each(c => { if (c.active && c.x < -sx(40)) c.destroy(); });
 
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= Flow (full-panel overlays) =======
+  // ======= Flow =======
   function toControls() { hide(splash1); show(splash2); }
-  splash1Next.addEventListener('click', toControls);
-  splash1.addEventListener('click', (e)=>{ if (e.target === splash1) toControls(); });
-  window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
+  document.getElementById('splash-1-next').addEventListener('click', toControls);
+  document.getElementById('splash-1').addEventListener('click', (e)=>{ if (e.target === document.getElementById('splash-1')) toControls(); });
+  window.addEventListener('keydown', (e)=>{ if (document.getElementById('splash-1').classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
 
   function startRun() {
     const s = scene; if (!s) return;
@@ -620,7 +616,6 @@
     s.gameOver = false;
     s.gameStarted = true;
 
-    // Reset jump buffer flags for first run
     s.jumpQueuedAt = -Infinity;
     s.jumpReleased = false;
     s.lastOnGroundAt = s.time.now;
@@ -628,40 +623,36 @@
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
     s.player.anims.resume();
+    s.dust.start(); // *** CHANGES: dust starts with run
 
     s.startTime = s.time.now;
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
   }
-  startCTA.addEventListener('click', startRun);
-  splash2.addEventListener('click', (e)=>{ if (e.target === splash2) startRun(); });
-  window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
+  document.getElementById('start-cta').addEventListener('click', startRun);
+  document.getElementById('splash-2').addEventListener('click', (e)=>{ if (e.target === document.getElementById('splash-2')) startRun(); });
+  window.addEventListener('keydown', (e)=>{ if (document.getElementById('splash-2').classList.contains('show') && (e.code==='Space' || e.code==='Enter')) startRun(); });
 
   function restartRun() {
     const s = scene; if (!s) return;
     hide(gameover);
 
-    // Hard reset timers/tweens so nothing from the previous run fires later
     try { s.tweens.killAll(); } catch {}
     try { s.time.removeAllEvents(); } catch {}
 
-    // Clear all entities
     s.obstacles.clear(true, true);
     s.collectibles.clear(true, true);
     s.shurikens.clear(true, true);
 
-    // Reset player (remain +100px right)
     s.player.body.enable = true;
     s.player.setActive(true).setVisible(true);
     s.player.setPosition(sx(220), GROUND_Y);
     s.player.setVelocity(0, 0);
     s.player.setAlpha(1).clearTint();
 
-    // Reset throw/arms state so shooting works immediately
     s.throwing = false;
     if (s.arms) { s.arms.setVisible(false); s.arms.anims?.stop(); }
 
-    // Reset gameplay state
     s.invincible = false; s.speedMult = 1.0; s._prevSpeedMult = 1.0;
     s.score = 0; s.scoreText.setText('SCORE 0');
     s.difficulty = 0; s.worldSpeed = SPEED;
@@ -670,21 +661,20 @@
     s.gameOver = false; s.gameStarted = true;
     if (s._obstacleCollider) s._obstacleCollider.active = true;
 
-    // Reset jump buffer/coyote flags
     s.jumpQueuedAt = -Infinity;
     s.jumpReleased = false;
     s.lastOnGroundAt = s.time.now;
 
-    // Resume world + animation
     s.physics.world.resume();
     s.player.anims.play('base-run', true);
     s.player.anims.resume();
+    s.dust.start(); // *** CHANGES
   }
-  restartCTA.addEventListener('click', restartRun);
-  gameover.addEventListener('click', (e)=>{ if (e.target === gameover) restartRun(); });
-  window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartRun(); });
+  document.getElementById('restart-cta').addEventListener('click', restartRun);
+  document.getElementById('gameover').addEventListener('click', (e)=>{ if (e.target === document.getElementById('gameover')) restartRun(); });
+  window.addEventListener('keydown', (e)=>{ if (document.getElementById('gameover').classList.contains('show') && e.code === 'Space') restartRun(); });
 
-  // ======= Fullscreen (no rebuild) =======
+  // ======= Fullscreen =======
   async function lockLandscape() { try { await screen.orientation?.lock?.('landscape'); } catch {} }
   async function enterFullscreen() {
     try {
@@ -707,7 +697,7 @@
     outer.classList.remove('fs');
     game.scale.refresh();
   }
-  fsBtn.addEventListener('click', async () => {
+  document.getElementById('fs-btn').addEventListener('click', async () => {
     if (!document.fullscreenElement && !document.webkitFullscreenElement) await enterFullscreen();
     else await exitFullscreen();
   });
@@ -717,13 +707,12 @@
     game.scale.refresh();
   });
 
-  // ======= Rotate/UX – pause/resume only, no rebuilds =======
+  // ======= Rotate/UX =======
   function updateUX() {
     const onMobile = isMobile();
     const showRotate = onMobile && isPortrait();
     rotate.classList.toggle('show', showRotate);
     fsBtn.classList.toggle('show', onMobile);
-
     try {
       if (!scene) return;
       if (showRotate && scene.gameStarted && !scene.gameOver) scene.physics.world.pause();
@@ -735,7 +724,7 @@
   window.addEventListener('pageshow', updateUX);
 
   // ======= Boot UX =======
-  updateUX(); // Splash 1 shows by default; progresses to Splash 2 then Start
+  updateUX();
 })();
 </script>
 </body>
