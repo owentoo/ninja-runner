@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Stable Restart + YouTube-style Mobile FS</title>
+  <title>Ninja Runner — Stable Restart</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -16,11 +16,9 @@
       background: transparent; overflow: hidden;
     }
 
-    /* Immersive fallback toggles */
     .immersive body { overflow: hidden; }
     .immersive #game-outer { height: 100dvh; }
 
-    /* STAGE = Phaser parent; max 1100px on desktop; gray shows bounds */
     #stage {
       position: relative;
       width: min(100%, 1100px);
@@ -30,12 +28,9 @@
       background: #d9d9d9;
       box-shadow: inset 0 0 0 2px #b5b5b5;
       border-radius: 6px;
-      transition: none; /* prevent CSS animation during freeze */
     }
-    /* When we freeze layout, we set explicit px width/height; keep letterbox off */
     #stage.frozen { aspect-ratio: auto !important; }
 
-    /* Fullscreen: stage fills fully */
     #game-outer.fs #stage {
       width: 100svw; height: 100svh; aspect-ratio: auto;
       border-radius: 0; box-shadow: none;
@@ -65,7 +60,11 @@
       background: #00b894; color: #0b1b16; cursor: pointer;
     }
 
-    /* Fullscreen button (mobile both orientations) */
+    /* z-index fixes */
+    #gameover { z-index: 20; }          /* sits above others */
+    #rotate-overlay { z-index: 9; }     /* sits below gameover */
+
+    /* Fullscreen button */
     #fs-btn {
       position: absolute; right: 10px; top: 10px; z-index: 11;
       padding: 8px 10px; border: 0; border-radius: 12px;
@@ -154,8 +153,8 @@
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   let game = null;
   let currentScaleMode = Phaser.Scale.FIT;
-  let resumeImmediately = false; // restart straight into play
-  let justRestartedUntil = 0;    // <-- grace window to avoid portrait auto-pause after restart
+  let resumeImmediately = false;
+  let justRestartedUntil = 0;
 
   const outer = document.getElementById('game-outer');
   const stage = document.getElementById('stage');
@@ -170,7 +169,7 @@
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
 
-  // ---------- LAYOUT FREEZE to prevent jitter during restart/fullscreen ----------
+  // ---------- LAYOUT FREEZE ----------
   function freezeStageSize() {
     const r = stage.getBoundingClientRect();
     stage.classList.add('frozen');
@@ -183,39 +182,50 @@
     stage.classList.remove('frozen');
   }
 
-  // Build game, wait frames, refresh scale, then unfreeze (if asked)
+  // Build game with robust visibility handling
   async function buildGame(scaleMode, { freezeDuringBuild = false } = {}) {
     currentScaleMode = scaleMode;
     if (freezeDuringBuild) freezeStageSize();
 
     if (game) { try { game.destroy(true); } catch {} game = null; }
 
-    // Hide canvas during rebuild to avoid any flash/jitter
     const canvas = document.getElementById('game');
     canvas.style.visibility = 'hidden';
 
-    game = new Phaser.Game({
-      type: Phaser.CANVAS,
-      backgroundColor: '#87ceeb',
-      canvas,
-      resolution: DPR,
-      physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-      scale: {
-        parent: 'stage', width: W, height: H,
-        mode: scaleMode, autoCenter: Phaser.Scale.CENTER_BOTH,
-        fullscreenTarget: 'game-outer',
-        expandParent: true
-      },
-      scene: { preload, create, update }
-    });
+    let built = false;
+    try {
+      game = new Phaser.Game({
+        type: Phaser.CANVAS,
+        backgroundColor: '#87ceeb',
+        canvas,
+        resolution: DPR,
+        physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
+        scale: {
+          parent: 'stage', width: W, height: H,
+          mode: scaleMode, autoCenter: Phaser.Scale.CENTER_BOTH,
+          fullscreenTarget: 'game-outer',
+          expandParent: true
+        },
+        scene: { preload, create, update }
+      });
 
-    // Extra-stable boot: two RAFs, refresh, one more RAF, refresh again
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    try { game.scale.refresh(); } catch {}
-    await new Promise(r => requestAnimationFrame(r));
-    try { game.scale.refresh(); } catch {}
-    canvas.style.visibility = 'visible';
-    if (freezeDuringBuild) unfreezeStageSize();
+      // Two RAFs + refresh + one more RAF + refresh (settle layout)
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      try { game.scale.refresh(); } catch {}
+      await new Promise(r => requestAnimationFrame(r));
+      try { game.scale.refresh(); } catch {}
+      built = true;
+    } finally {
+      // Always reveal canvas even if an error occurred
+      canvas.style.visibility = 'visible';
+      if (freezeDuringBuild) unfreezeStageSize();
+      if (!built) {
+        // Show splash1 so user sees something if boot failed
+        splash1.classList.add('show');
+        splash2.classList.remove('show');
+        gameover.classList.remove('show');
+      }
+    }
   }
 
   // ======= PLACEHOLDERS =======
@@ -242,7 +252,8 @@
     makeCrate(this);
     for (let i=0;i<2;i++) solid(this,'ptero'+i,48,24,0x000000);
     makeCollectibleTex(this);
-    this.load.image('collectible','collectible.png');
+    /* Removed duplicate load for 'collectible' to avoid key conflicts on rebuild
+       this.load.image('collectible','collectible.png'); */
   }
 
   function ensureBGAndGroundTextures(s){
@@ -256,12 +267,10 @@
   function create(){
     const s=this; ensureBGAndGroundTextures(s);
 
-    // boot paused until splash or immediate resume on restart
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
 
-    // Parallax
     s.bgClouds    = s.add.tileSprite(0, Math.round(H*0.10), W*2, Math.round(H*0.135),'bgClouds').setOrigin(0,0).setDepth(0);
     s.bgMountains = s.add.tileSprite(0, Math.round(H*0.152),W*2, Math.round(H*0.152),'bgMountains').setOrigin(0,0).setDepth(1);
     s.bgHills     = s.add.tileSprite(0, Math.round(H*0.22), W*2, Math.round(H*0.118),'bgHills').setOrigin(0,0).setDepth(2);
@@ -279,7 +288,6 @@
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
-    // Anims
     s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
@@ -320,10 +328,8 @@
     s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
     s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
 
-    // Score UI
     s.scoreText = s.add.text(sx(14), sy(12), 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
 
-    // Collisions
     s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => { if (!s.invincible) endGame(s); });
     s.physics.add.overlap(s.player, s.obstacles, (player, o) => { if (s.invincible) zapObstacle(s, o); });
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
@@ -342,7 +348,7 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Disable input briefly to avoid click-through during rebuild
+    // Guard against click-through during rebuild
     s.input.enabled = false;
     s.time.delayedCall(150, () => { s.input.enabled = true; });
 
@@ -369,6 +375,11 @@
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
+
+    // Stop any power-up timers to prevent post-death flashes
+    if (s._powerupTimer) s._powerupTimer.remove(false);
+    if (s._warnTimer) s._warnTimer.remove(false);
+
     stopBlink(s); s.superBanner?.setVisible(false); s.player.clearTint();
     s.invincible=false; s.speedMult=1.0; if (s.trailParticles) s.trailParticles.stop();
 
@@ -548,113 +559,4 @@
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= Flow: splash, start, restart =======
-  function toControls() { splash1.classList.remove('show'); splash2.classList.add('show'); }
-  splash1.addEventListener('click', toControls);
-  window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
-
-  function actuallyStartGame() {
-    splash2.classList.remove('show');
-    try {
-      const s = game.scene.scenes[0]; if (!s) return;
-      s.gameStarted = true; s.physics.world.resume(); s.player.anims.resume();
-      s.startTime = s.time.now; s.nextSpawn = 0; s.nextCollectible = s.time.now + collectibleInterval();
-    } catch {}
-  }
-  startCTA.addEventListener('click', actuallyStartGame);
-  window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) actuallyStartGame(); });
-
-  // Robust restart: freeze layout, rebuild, resume immediately (no jitter)
-  async function restartGame() {
-    gameover.classList.remove('show');
-    resumeImmediately = true;
-    justRestartedUntil = performance.now() + 500; // <-- grace: don't auto-pause on portrait immediately
-    await buildGame(currentScaleMode, { freezeDuringBuild: true });
-  }
-  restartCTA.addEventListener('click', restartGame);
-  window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartGame(); });
-  gameover.addEventListener('click', restartGame);
-
-  // ======= Fullscreen like YouTube =======
-  function canGoFullscreen() {
-    const el = outer;
-    return el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen || el.mozRequestFullScreen;
-  }
-  async function lockLandscape() {
-    try { await screen.orientation?.lock?.('landscape'); } catch {}
-  }
-  async function enterFullscreen() {
-    try {
-      if (outer.requestFullscreen) await outer.requestFullscreen({ navigationUI: 'hide' });
-      else if (outer.webkitRequestFullscreen) outer.webkitRequestFullscreen();
-      else if (outer.msRequestFullscreen) outer.msRequestFullscreen();
-      else if (outer.mozRequestFullScreen) outer.mozRequestFullScreen();
-      await lockLandscape();
-      document.documentElement.classList.remove('immersive');
-      outer.classList.add('fs');
-      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
-    } catch {
-      // Immersive fallback
-      document.documentElement.classList.add('immersive');
-      outer.classList.add('fs'); // still let stage fill
-      window.scrollTo(0,1);
-      await buildGame(Phaser.Scale.ENVELOP, { freezeDuringBuild: true });
-    }
-  }
-  async function exitFullscreen() {
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (document.webkitFullscreenElement) document.webkitExitFullscreen?.();
-    } catch {}
-    document.documentElement.classList.remove('immersive');
-    outer.classList.remove('fs');
-    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: true });
-  }
-
-  fsBtn.addEventListener('click', async () => {
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      await enterFullscreen();
-    } else {
-      await exitFullscreen();
-    }
-  });
-
-  document.addEventListener('fullscreenchange', async () => {
-    const fs = !!document.fullscreenElement || !!document.webkitFullscreenElement;
-    outer.classList.toggle('fs', fs);
-    if (game) { await new Promise(r => requestAnimationFrame(r)); game.scale.refresh(); }
-  });
-
-  // Rotate/UX
-  function updateUX() {
-    const onMobile = isMobile();
-    const showRotate = onMobile && isPortrait();
-    rotate.classList.toggle('show', showRotate);
-    fsBtn.classList.toggle('show', onMobile);
-
-    try {
-      if (!game) return;
-      const s = game.scene.scenes[0]; if (!s) return;
-
-      const inGrace = performance.now() < justRestartedUntil; // <-- portrait pause grace
-      if (!inGrace && showRotate && s.gameStarted && !s.gameOver) {
-        s.physics.world.pause();
-      } else if (!showRotate && s.gameStarted && !s.gameOver) {
-        s.physics.world.resume();
-      }
-    } catch {}
-  }
-  window.addEventListener('resize', () => { updateUX(); if (game) game.scale.refresh(); });
-  window.addEventListener('orientationchange', () => { updateUX(); if (game) game.scale.refresh(); });
-  window.addEventListener('pageshow', updateUX);
-
-  // Boot
-  (async () => {
-    await buildGame(Phaser.Scale.FIT, { freezeDuringBuild: false });
-    updateUX();
-  })();
-
-})();
-</script>
-</body>
-</html>
+  // ======= Flow: splash
