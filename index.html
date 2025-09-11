@@ -2,46 +2,42 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Ninja Runner — Responsive + Splash + ENVELOP FS</title>
+  <title>Ninja Runner — Responsive + Splash + Game Over + ENVELOP FS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { height: 100%; margin: 0; background: #d9d9d9; } /* gray outside everything */
 
-    /* OUTER: fills viewport, centers the stage block; remains gray behind stage */
+    /* OUTER fills viewport; remains gray behind stage */
     #game-outer {
       position: relative;
       width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
-      background: transparent; /* keep global gray from <body> */
+      background: transparent;
       overflow: hidden;
     }
 
-    /* STAGE: Phaser parent with desktop max width; gray shows letterbox edges too */
+    /* STAGE = Phaser parent; gray in letterbox areas; 1100px max on desktop */
     #stage {
       position: relative;
-      width: min(100%, 1100px);           /* desktop max width */
-      aspect-ratio: 1280 / 592;           /* maintain design aspect */
+      width: min(100%, 1100px);
+      aspect-ratio: 1280 / 592;
       height: auto;
-      display: grid;                      /* stack overlays */
-      place-items: center;
-      background: #d9d9d9;                /* gray in any bars inside the stage */
-      box-shadow: inset 0 0 0 2px #b5b5b5;/* subtle frame line so edges are obvious */
+      display: grid; place-items: center;
+      background: #d9d9d9;                /* gray shows game frame edges */
+      box-shadow: inset 0 0 0 2px #b5b5b5;
       border-radius: 6px;
     }
 
-    /* When OUTER is fullscreen, stage expands fully */
+    /* Fullscreen: stage fills; hide frame line */
     #game-outer.fs #stage {
-      width: 100svw;
-      height: 100svh;
-      aspect-ratio: auto;
-      border-radius: 0;
-      box-shadow: none; /* full-bleed in FS */
+      width: 100svw; height: 100svh; aspect-ratio: auto;
+      border-radius: 0; box-shadow: none;
     }
 
     canvas { display: block; }
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
 
-    /* Overlays (rotate, splash) share base styling */
+    /* Generic overlay */
     .overlay {
       position: absolute; inset: 0;
       display: none; align-items: center; justify-content: center;
@@ -49,25 +45,20 @@
     }
     .overlay.show { display: flex; }
     .sheet {
-      max-width: 560px;
-      padding: 18px 16px;
-      border-radius: 14px;
-      background: rgba(0,0,0,.78);
-      color: #fff;
-      border: 1px solid rgba(255,255,255,.18);
-      backdrop-filter: blur(6px);
+      max-width: 560px; padding: 18px 16px; border-radius: 14px;
+      background: rgba(0,0,0,.78); color: #fff;
+      border: 1px solid rgba(255,255,255,.18); backdrop-filter: blur(6px);
       font: 600 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto;
     }
     .sheet h2 { margin: 0 0 8px; font-size: 20px; }
     .sheet p { margin: 8px 0; font-weight: 500; }
     .cta {
-      margin-top: 12px;
-      padding: 10px 14px; border: 0; border-radius: 12px;
+      margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 12px;
       font: 600 14px/1 system-ui, -apple-system, Segoe UI, Roboto;
       background: #00b894; color: #0b1b16; cursor: pointer;
     }
 
-    /* Fullscreen button (mobile portrait) */
+    /* Fullscreen button (mobile – both orientations now) */
     #fs-btn {
       position: absolute; right: 10px; top: 10px; z-index: 11;
       padding: 8px 10px; border: 0; border-radius: 12px;
@@ -99,8 +90,18 @@
           <h2>How to Play</h2>
           <p>Jump: <b>↑</b> or <b>Space</b> or <b>Tap Left Half</b></p>
           <p>Throw: <b>X</b> or <b>Click/Tap Right Half</b></p>
-          <p>Restart: <b>R</b></p>
+          <p>Restart: <b>Space</b> (desktop) or <b>Tap</b> (mobile)</p>
           <button id="start-cta" class="cta">Start</button>
+        </div>
+      </div>
+
+      <!-- Game Over overlay -->
+      <div id="gameover" class="overlay">
+        <div class="sheet">
+          <h2>Game Over</h2>
+          <p>Your Score: <b id="final-score">0</b></p>
+          <p>Press <b>Space</b> (desktop) or <b>Tap</b> (mobile) to restart</p>
+          <button id="restart-cta" class="cta">Restart</button>
         </div>
       </div>
 
@@ -116,12 +117,12 @@
     </div>
   </div>
 
-  <div class="hint">↑/SPACE = jump • X/click = throw (right half) • R = restart</div>
+  <div class="hint">↑/SPACE = jump • X/right half = throw • Space/Tap to restart</div>
 
 <script>
 (() => {
   // ======= DESIGN SPACE & SCALERS =======
-  const W = 1280, H = 592;                   // 844:390 ratio @ 1280 wide
+  const W = 1280, H = 592;     // 844:390 at 1280 wide
   const BASE = { W: 1280, H: 592 };
   const sx = (n) => Math.round(n * (W / BASE.W));
   const sy = (n) => Math.round(n * (H / BASE.H));
@@ -149,6 +150,7 @@
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   let game = null;
   let currentScaleMode = Phaser.Scale.FIT;
+  let resumeImmediately = false; // restart directly into gameplay (skip splash)
 
   const isMobile   = () => /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
@@ -158,13 +160,12 @@
     if (game) { game.destroy(true); game = null; }
     game = new Phaser.Game({
       type: Phaser.CANVAS,
-      backgroundColor: '#87ceeb', // in-canvas sky; outside is gray
+      backgroundColor: '#87ceeb', // sky; outside is gray
       canvas: document.getElementById('game'),
       resolution: DPR,
       physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
       scale: {
-        parent: 'stage',                   // capped at 1100px on desktop
-        width: W, height: H,
+        parent: 'stage', width: W, height: H,
         mode: scaleMode, autoCenter: Phaser.Scale.CENTER_BOTH,
         fullscreenTarget: 'game-outer',
         expandParent: true
@@ -211,7 +212,7 @@
   function create(){
     const s=this; ensureBGAndGroundTextures(s);
 
-    // boot paused until splash completes
+    // boot paused until splash or immediate resume on restart
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
@@ -234,14 +235,14 @@
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
-    // 🔑 Play the run animation immediately, then pause for splash
+    // Anims
     s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
-    s.player.play('base-run');
-    s.player.anims.pause(); // splash holds it; we'll resume on Start
-
     s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
     s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
     s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
+
+    // Start run anim, then pause until game start
+    s.player.play('base-run'); s.player.anims.pause();
 
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
@@ -259,36 +260,27 @@
     // Inputs
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
-    const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
 
-    // 🔄 Left-half = Jump; Right-half = Throw
+    // Left-half = Jump; Right-half = Throw
     s.input.on('pointerdown', (pointer) => {
       if (!s.gameStarted || s.gameOver) return;
-      // Use worldX (design space) so it works with Scale FIT/ENVELOP
       const isLeft = pointer.worldX < (W * 0.5);
-      if (isLeft) {
-        s.jumpQueuedAt = s.time.now; // leverage buffering in update()
-      } else {
-        doThrow(s);
-      }
+      if (isLeft) s.jumpQueuedAt = s.time.now; else doThrow(s);
     });
 
-    // Keyboard bindings
     s.input.keyboard.on('keydown-UP',    ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keydown-SPACE', ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
     keyX.on('down', () => { if (s.gameStarted) doThrow(s); });
-    keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
     // Jump buffer/coyote
     s.lastOnGroundAt = s.time.now; s.jumpQueuedAt = -Infinity; s.jumpReleased = false;
-    s.input.keyboard.on('keyup-UP',      ()=>{ s.jumpReleased = true; });
-    s.input.keyboard.on('keyup-SPACE',   ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-UP',    ()=>{ s.jumpReleased = true; });
+    s.input.keyboard.on('keyup-SPACE', ()=>{ s.jumpReleased = true; });
 
-    // UI
+    // UI (kept for debug; Game Over uses DOM overlay)
     s.scoreText   = s.add.text(sx(14), sy(12), 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
-    s.gameOverTxt = s.add.text(W/2, H/2 - sy(16), '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
-    s.restartTxt  = s.add.text(W/2, H/2 + sy(12), '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
 
+    // Collisions
     s._obstacleCollider = s.physics.add.collider(s.player, s.obstacles, (player, o) => { if (!s.invincible) endGame(s); });
     s.physics.add.overlap(s.player, s.obstacles, (player, o) => { if (s.invincible) zapObstacle(s, o); });
     s.physics.add.overlap(s.shurikens, s.obstacles, (b,o)=>{
@@ -307,21 +299,40 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // Start in a *paused* state for splash
+    // Pause physics until start
     s.physics.world.pause();
+
+    // If restarting directly into gameplay, skip splash and resume
+    if (resumeImmediately) {
+      s.gameStarted = true;
+      s.physics.world.resume();
+      s.player.anims.resume();
+      s.startTime = s.time.now;
+      resumeImmediately = false;
+      // hide DOM overlays if any got stuck visible
+      document.getElementById('splash-1').classList.remove('show');
+      document.getElementById('splash-2').classList.remove('show');
+      document.getElementById('gameover').classList.remove('show');
+    }
   }
 
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
+
   function endGame(s){
-    if (s.gameOver) return; s.gameOver = true; s.physics.world.pause();
-    s.player.anims.pause(); s.arms.anims.pause();
+    if (s.gameOver) return; s.gameOver = true;
+    s.physics.world.pause(); s.player.anims.pause(); s.arms.anims?.pause();
     s.obstacles.children.each(o => { if (o.body) o.body.enable = false; });
     s.shurikens.children.each(b => { if (b.body) b.body.enable = false; });
     s.collectibles.children.each(c => { if (c.body) c.body.enable = false; });
     stopBlink(s); s.superBanner.setVisible(false); s.player.clearTint();
     s.invincible=false; s.speedMult=1.0; if (s.trailParticles) s.trailParticles.stop();
-    s.gameOverTxt.setText('GAME OVER'); s.restartTxt.setText('Press R to Restart');
+
+    // Show DOM Game Over with score
+    const go = document.getElementById('gameover');
+    document.getElementById('final-score').textContent = Math.floor(s.score);
+    go.classList.add('show');
   }
+
   function zapObstacle(s,o){ if (!o || !o.active) return; o.setTint(0x99fffd); s.time.delayedCall(40, ()=>{ if (o.active) o.destroy(); }); s.score += 2; }
 
   function activatePowerUp(s){
@@ -442,7 +453,7 @@
 
   function update(time, delta){
     const s=this;
-    if (!s.gameStarted) return;      // gate until Start CTA
+    if (!s.gameStarted) return;
     if (s.gameOver) return;
 
     const elapsed = s.time.now - s.startTime;
@@ -495,15 +506,16 @@
     s.scoreText.setText('SCORE ' + Math.floor(s.score));
   }
 
-  // ======= DOM Overlays: splash flow + rotate + FS =======
+  // ======= DOM Overlays: splash flow + rotate + FS + game over =======
   const outer = document.getElementById('game-outer');
   const rotate = document.getElementById('rotate-overlay');
   const splash1 = document.getElementById('splash-1');
   const splash2 = document.getElementById('splash-2');
+  const gameover = document.getElementById('gameover');
   const startCTA = document.getElementById('start-cta');
+  const restartCTA = document.getElementById('restart-cta');
   const fsBtn = document.getElementById('fs-btn');
 
-  // step 1 -> step 2 on space or tap
   function toControls() {
     splash1.classList.remove('show');
     splash2.classList.add('show');
@@ -511,32 +523,40 @@
   splash1.addEventListener('click', toControls);
   window.addEventListener('keydown', (e)=>{ if (splash1.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) toControls(); });
 
-  // step 2 -> start game
   function actuallyStartGame() {
     splash2.classList.remove('show');
     try {
-      const s = game.scene.scenes[0];
-      if (!s) return;
-      s.gameStarted = true;
-      s.physics.world.resume();
-      s.player.anims.resume();           // ✅ now the run animation plays
-      s.startTime = s.time.now;          // reset difficulty timer
-      s.nextSpawn = 0;                   // allow immediate scheduling
-      s.nextCollectible = s.time.now + collectibleInterval();
+      const s = game.scene.scenes[0]; if (!s) return;
+      s.gameStarted = true; s.physics.world.resume(); s.player.anims.resume();
+      s.startTime = s.time.now; s.nextSpawn = 0; s.nextCollectible = s.time.now + collectibleInterval();
     } catch (e) {}
   }
   startCTA.addEventListener('click', actuallyStartGame);
   window.addEventListener('keydown', (e)=>{ if (splash2.classList.contains('show') && (e.code==='Space' || e.code==='Enter')) actuallyStartGame(); });
 
+  // Restart flow from Game Over
+  function restartGame() {
+    gameover.classList.remove('show');
+    resumeImmediately = true;                   // skip splash on restart
+    const s = game.scene.scenes[0];
+    if (s) s.scene.restart();                   // ✅ now works reliably
+  }
+  restartCTA.addEventListener('click', restartGame);
+  // Desktop: Space to restart
+  window.addEventListener('keydown', (e)=>{ if (gameover.classList.contains('show') && e.code === 'Space') restartGame(); });
+  // Mobile: tap anywhere to restart
+  gameover.addEventListener('click', restartGame);
+
   function updateUX() {
-    const showRotate = isMobile() && isPortrait();
+    const onMobile = isMobile();
+    const showRotate = onMobile && isPortrait();
     rotate.classList.toggle('show', showRotate);
-    fsBtn.classList.toggle('show', showRotate);
+    // Show FS button on mobile in BOTH orientations (hide on desktop)
+    fsBtn.classList.toggle('show', onMobile);
     try {
       if (!game) return;
-      const s = game.scene.scenes[0];
-      if (!s) return;
-      if (showRotate && s.gameStarted) s.physics.world.pause();
+      const s = game.scene.scenes[0]; if (!s) return;
+      if (showRotate && s.gameStarted && !s.gameOver) s.physics.world.pause();
       else if (!showRotate && s.gameStarted && !s.gameOver) s.physics.world.resume();
     } catch (e) {}
   }
@@ -544,7 +564,7 @@
   fsBtn.addEventListener('click', async () => {
     if (!document.fullscreenElement) {
       try { await outer.requestFullscreen({ navigationUI: 'hide' }); } catch (e) { console.warn('FS denied:', e); }
-      buildGame(Phaser.Scale.ENVELOP);      // fullscreen: cover
+      buildGame(Phaser.Scale.ENVELOP);      // fullscreen: cover (minimal cropping)
     } else {
       try { await document.exitFullscreen(); } catch (e) {}
       buildGame(Phaser.Scale.FIT);          // back to FIT
@@ -562,7 +582,7 @@
   window.addEventListener('orientationchange', () => { updateUX(); if (game) game.scale.refresh(); });
   window.addEventListener('pageshow', updateUX);
 
-  // Boot in FIT (desktop + landscape default); splash1 visible initially
+  // Boot
   buildGame(Phaser.Scale.FIT);
   updateUX();
 })();
