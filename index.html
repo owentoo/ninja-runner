@@ -5,30 +5,39 @@
   <title>Ninja Runner — Responsive + Splash + ENVELOP FS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body { height: 100%; margin: 0; background: #f2f2f2; }
-    /* OUTER: fills viewport, centers the stage block */
+    html, body { height: 100%; margin: 0; background: #d9d9d9; } /* gray outside everything */
+
+    /* OUTER: fills viewport, centers the stage block; remains gray behind stage */
     #game-outer {
       position: relative;
       width: 100svw; height: 100svh;
       display: flex; align-items: center; justify-content: center;
-      background: #87ceeb; /* matches in-game bg to hide letterbox */
+      background: transparent; /* keep global gray from <body> */
       overflow: hidden;
     }
-    /* STAGE: the actual Phaser parent that gets FIT scaling */
+
+    /* STAGE: Phaser parent with desktop max width; gray shows letterbox edges too */
     #stage {
       position: relative;
       width: min(100%, 1100px);           /* desktop max width */
       aspect-ratio: 1280 / 592;           /* maintain design aspect */
       height: auto;
-      display: grid;                      /* lets overlays stack */
+      display: grid;                      /* stack overlays */
       place-items: center;
+      background: #d9d9d9;                /* gray in any bars inside the stage */
+      box-shadow: inset 0 0 0 2px #b5b5b5;/* subtle frame line so edges are obvious */
+      border-radius: 6px;
     }
-    /* When outer is fullscreen, let stage expand fully */
+
+    /* When OUTER is fullscreen, stage expands fully */
     #game-outer.fs #stage {
       width: 100svw;
       height: 100svh;
       aspect-ratio: auto;
+      border-radius: 0;
+      box-shadow: none; /* full-bleed in FS */
     }
+
     canvas { display: block; }
     .hint { font: 12px/1.4 monospace; color: #333; text-align: center; padding: 6px 10px; background:#f2f2f2; }
 
@@ -88,8 +97,8 @@
       <div id="splash-2" class="overlay">
         <div class="sheet">
           <h2>How to Play</h2>
-          <p>Jump: <b>↑</b> or <b>Space</b></p>
-          <p>Throw: <b>X</b> or <b>Click / Tap</b></p>
+          <p>Jump: <b>↑</b> or <b>Space</b> or <b>Tap Left Half</b></p>
+          <p>Throw: <b>X</b> or <b>Click/Tap Right Half</b></p>
           <p>Restart: <b>R</b></p>
           <button id="start-cta" class="cta">Start</button>
         </div>
@@ -107,7 +116,7 @@
     </div>
   </div>
 
-  <div class="hint">↑/SPACE = jump • X/click = throw • R = restart</div>
+  <div class="hint">↑/SPACE = jump • X/click = throw (right half) • R = restart</div>
 
 <script>
 (() => {
@@ -149,12 +158,12 @@
     if (game) { game.destroy(true); game = null; }
     game = new Phaser.Game({
       type: Phaser.CANVAS,
-      backgroundColor: '#87ceeb',
+      backgroundColor: '#87ceeb', // in-canvas sky; outside is gray
       canvas: document.getElementById('game'),
       resolution: DPR,
       physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
       scale: {
-        parent: 'stage',                   // <- parent is the stage (capped at 1100px on desktop)
+        parent: 'stage',                   // capped at 1100px on desktop
         width: W, height: H,
         mode: scaleMode, autoCenter: Phaser.Scale.CENTER_BOTH,
         fullscreenTarget: 'game-outer',
@@ -202,7 +211,7 @@
   function create(){
     const s=this; ensureBGAndGroundTextures(s);
 
-    // --- boot paused until splash flow finishes ---
+    // boot paused until splash completes
     s.gameStarted=false; s.gameOver=false; s.throwing=false; s.score=0;
     s.difficulty=0; s.worldSpeed=SPEED; s.startTime=s.time.now;
     s.speedMult=1.0; s._prevSpeedMult=1.0; s.invincible=false;
@@ -225,6 +234,15 @@
     s.physics.add.collider(s.player, floor);
     s.player.setDepth(4.5);
 
+    // 🔑 Play the run animation immediately, then pause for splash
+    s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
+    s.player.play('base-run');
+    s.player.anims.pause(); // splash holds it; we'll resume on Start
+
+    s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
+    s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
+    s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
+
     s.arms = s.add.sprite(s.player.x, s.player.y, 'arms0').setOrigin(0.5,1).setDepth(4.6).setVisible(false);
     s.events.on('update', ()=>{ s.arms.x = s.player.x; s.arms.y = s.player.y; });
 
@@ -234,28 +252,39 @@
       tint: 0x8ef1ff, follow: s.player, blendMode: 'ADD'
     }); s.trailParticles.stop();
 
-    s.anims.create({ key: 'base-run', frames: s.anims.generateFrameNumbers('ninjaRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
-    s.anims.create({ key:'enemy-run', frames: s.anims.generateFrameNumbers('enemyRun', { start: 0, end: 7 }), frameRate: 12, repeat: -1 });
-    s.anims.create({ key:'arms-throw',frames:[{key:'armsThrow0'},{key:'armsThrow1'}], frameRate:12, repeat:0 });
-    s.anims.create({ key:'ptero-fly', frames:[{key:'ptero0'},{key:'ptero1'}], frameRate:8, repeat:-1 });
-
     s.obstacles   = s.physics.add.group({ allowGravity:false, immovable:true });
     s.collectibles= s.physics.add.group({ allowGravity:false, immovable:true });
     s.shurikens   = s.physics.add.group({ maxSize: 12 });
 
+    // Inputs
     s.cursors = s.input.keyboard.createCursorKeys();
     const keyX = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     const keyR = s.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    s.input.on('pointerdown', () => doThrow(s));
-    keyX.on('down', () => doThrow(s));
+
+    // 🔄 Left-half = Jump; Right-half = Throw
+    s.input.on('pointerdown', (pointer) => {
+      if (!s.gameStarted || s.gameOver) return;
+      // Use worldX (design space) so it works with Scale FIT/ENVELOP
+      const isLeft = pointer.worldX < (W * 0.5);
+      if (isLeft) {
+        s.jumpQueuedAt = s.time.now; // leverage buffering in update()
+      } else {
+        doThrow(s);
+      }
+    });
+
+    // Keyboard bindings
+    s.input.keyboard.on('keydown-UP',    ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
+    s.input.keyboard.on('keydown-SPACE', ()=>{ if (s.gameStarted) s.jumpQueuedAt = s.time.now; });
+    keyX.on('down', () => { if (s.gameStarted) doThrow(s); });
     keyR.on('down', () => { if (s.gameOver) s.scene.restart(); });
 
+    // Jump buffer/coyote
     s.lastOnGroundAt = s.time.now; s.jumpQueuedAt = -Infinity; s.jumpReleased = false;
-    s.input.keyboard.on('keydown-UP',    ()=>{ s.jumpQueuedAt = s.time.now; });
-    s.input.keyboard.on('keydown-SPACE', ()=>{ s.jumpQueuedAt = s.time.now; });
     s.input.keyboard.on('keyup-UP',      ()=>{ s.jumpReleased = true; });
     s.input.keyboard.on('keyup-SPACE',   ()=>{ s.jumpReleased = true; });
 
+    // UI
     s.scoreText   = s.add.text(sx(14), sy(12), 'SCORE 0', { fontFamily:'monospace', fontSize:16, color:'#000' }).setDepth(10);
     s.gameOverTxt = s.add.text(W/2, H/2 - sy(16), '', { fontFamily:'monospace', fontSize:20, color:'#000' }).setOrigin(0.5).setDepth(10);
     s.restartTxt  = s.add.text(W/2, H/2 + sy(12), '', { fontFamily:'monospace', fontSize:14, color:'#000' }).setOrigin(0.5).setDepth(10);
@@ -278,9 +307,8 @@
     s.nextSpawn = 0;
     s.nextCollectible = s.time.now + collectibleInterval();
 
-    // boot PAUSED (no motion; no anims) until start CTA
+    // Start in a *paused* state for splash
     s.physics.world.pause();
-    s.player.anims.pause();
   }
 
   function collectibleInterval(){ return COLLECTIBLE_BASE_INTERVAL + Phaser.Math.Between(-COLLECTIBLE_INTERVAL_JITTER, COLLECTIBLE_INTERVAL_JITTER); }
@@ -403,7 +431,7 @@
   }
 
   function doThrow(s){
-    if (!s.gameStarted || s.gameOver || s.throwing) return; // <- gate until started
+    if (!s.gameStarted || s.gameOver || s.throwing) return;
     s.throwing = true;
     s.arms.setVisible(true); s.arms.anims.play('arms-throw', true);
     s.time.delayedCall(90, ()=> spawnShuriken(s));
@@ -414,10 +442,9 @@
 
   function update(time, delta){
     const s=this;
-    // Gate the whole loop until game actually started
-    if (!s.gameStarted) return;
-
+    if (!s.gameStarted) return;      // gate until Start CTA
     if (s.gameOver) return;
+
     const elapsed = s.time.now - s.startTime;
     s.difficulty = Math.min(MAX_DIFF, Math.floor(elapsed / DIFF_EVERY_MS));
     s.worldSpeed = SPEED + s.difficulty * SPEED_STEP;
@@ -487,13 +514,12 @@
   // step 2 -> start game
   function actuallyStartGame() {
     splash2.classList.remove('show');
-    // get scene and unpause
     try {
       const s = game.scene.scenes[0];
       if (!s) return;
       s.gameStarted = true;
       s.physics.world.resume();
-      s.player.anims.resume();           // resume run anim
+      s.player.anims.resume();           // ✅ now the run animation plays
       s.startTime = s.time.now;          // reset difficulty timer
       s.nextSpawn = 0;                   // allow immediate scheduling
       s.nextCollectible = s.time.now + collectibleInterval();
@@ -510,7 +536,6 @@
       if (!game) return;
       const s = game.scene.scenes[0];
       if (!s) return;
-      // Only pause physics for rotate prompt if the game had started
       if (showRotate && s.gameStarted) s.physics.world.pause();
       else if (!showRotate && s.gameStarted && !s.gameOver) s.physics.world.resume();
     } catch (e) {}
